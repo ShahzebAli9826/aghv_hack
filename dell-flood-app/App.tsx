@@ -1548,21 +1548,21 @@ export default function App() {
 
                   {/* Right: Stacked Official Action Cards (NO RAISE ISSUE) */}
                   <View style={dashStyles.rightCol}>
-                    {/* Action Taken / Incident Triage */}
+                    {/* 4D Flood Nowcast */}
                     <TouchableOpacity 
                       style={dashStyles.actionCardBlue} 
-                      onPress={() => setActiveTab('triage')}
+                      onPress={() => setActiveTab('nowcast')}
                       activeOpacity={0.85}
                     >
                       <View style={dashStyles.actionIconBadgeBlue}>
-                        <CheckCircle2 size={16} color="#2563eb" />
+                        <Waves size={16} color="#2563eb" />
                       </View>
-                      <Text style={dashStyles.actionTitle}>{t(appLanguage, 'actionTakenQueueTitle')}</Text>
+                      <Text style={dashStyles.actionTitle}>{t(appLanguage, 'tabNowcast')}</Text>
                       <Text style={dashStyles.actionDesc} numberOfLines={2}>
-                        {t(appLanguage, 'actionTakenQueueDesc')}
+                        Physics-guided spatio-temporal inundation depth & velocity forecast.
                       </Text>
                       <View style={dashStyles.actionBtnBlue}>
-                        <Text style={dashStyles.actionBtnText}>{t(appLanguage, 'takeActionBtn')}</Text>
+                        <Text style={dashStyles.actionBtnText}>Open Nowcast →</Text>
                       </View>
                     </TouchableOpacity>
 
@@ -1827,12 +1827,12 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'triage' && (
-          <TriagePanel />
-        )}
-
         {activeTab === 'settings' && (
-          <SettingsPanel />
+          <SettingsPanel
+            onLogout={handleLogout}
+            username={currentUser}
+            role={role}
+          />
         )}
       </View>
 
@@ -1864,7 +1864,7 @@ export default function App() {
         })}
       />
 
-      {/* Navigation Tab Bar — 6 Tabs including 4D Nowcast (P32, P35) */}
+      {/* Navigation Tab Bar */}
       <View style={dashStyles.tabBar}>
         <TouchableOpacity 
           style={dashStyles.tabItem}
@@ -1910,18 +1910,7 @@ export default function App() {
           </Text>
         </TouchableOpacity>
 
-        {role === 'official' ? (
-          <TouchableOpacity 
-            style={dashStyles.tabItem}
-            onPress={() => setActiveTab('triage')}
-            activeOpacity={0.7}
-          >
-            <CheckCircle2 size={20} color={activeTab === 'triage' ? '#2563eb' : '#94a3b8'} />
-            <Text style={[dashStyles.tabLabel, activeTab === 'triage' && { color: '#2563eb', fontWeight: '700' }]}>
-              {t(appLanguage, 'tabTriage')}
-            </Text>
-          </TouchableOpacity>
-        ) : (
+        {role !== 'official' && (
           <TouchableOpacity 
             style={dashStyles.tabItem}
             onPress={() => setActiveTab('raise')}

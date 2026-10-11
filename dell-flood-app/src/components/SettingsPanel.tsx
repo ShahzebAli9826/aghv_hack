@@ -1,10 +1,16 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, TextInput, Switch, Alert } from 'react-native';
-import { Settings, Server, Shield, Check, RefreshCw } from 'lucide-react-native';
+import { Settings, Server, Shield, Check, RefreshCw, LogOut, User } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService, DEFAULT_API_URL } from '../services/api';
 
-export const SettingsPanel: React.FC = () => {
+interface SettingsPanelProps {
+  onLogout?: () => void;
+  username?: string;
+  role?: string;
+}
+
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onLogout, username, role }) => {
   const [useMock, setUseMock] = useState<boolean>(apiService.useMock);
   const [apiUrl, setApiUrl] = useState<string>(apiService.apiUrl);
   const [saved, setSaved] = useState<boolean>(false);
@@ -100,6 +106,29 @@ export const SettingsPanel: React.FC = () => {
           <Text style={styles.resetButtonText}>Reset to Default (192.168.1.7)</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Account & Session Card with Log Out */}
+      {onLogout && (
+        <View style={[styles.card, { marginTop: 14 }]}>
+          <View style={styles.accountRow}>
+            <View style={styles.accountBadge}>
+              <User size={18} color="#2563eb" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.accountName}>
+                {username ? `@${username}` : 'Active Session'}
+              </Text>
+              <Text style={styles.accountRole}>
+                Role: {role === 'official' ? 'Official / Admin Responder' : 'Citizen Reporter'}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity style={styles.logoutButton} onPress={onLogout} activeOpacity={0.85}>
+            <LogOut size={16} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.logoutButtonText}>Log Out</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       
       {/* Dev Info Footer */}
       <View style={styles.footer}>
@@ -239,8 +268,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600'
   },
+  accountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12
+  },
+  accountBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  accountName: {
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  accountRole: {
+    color: '#64748b',
+    fontSize: 11,
+    marginTop: 2
+  },
+  logoutButton: {
+    backgroundColor: '#dc2626',
+    borderRadius: 8,
+    height: 40,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  logoutButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: 'bold'
+  },
   footer: {
-    marginTop: 40,
+    marginTop: 32,
     alignItems: 'center'
   },
   footerText: {
