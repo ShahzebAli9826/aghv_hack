@@ -350,33 +350,32 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     `
         : `
     // Dynamic 4D Hydrological Inundation Contours (expands with horizon 0m -> +60m and rainfall)
-    var sf = ${spreadFactor.toFixed(3)};
     var outerFloodZone = [
-      [${activeLat + 0.011 * sf}, ${activeLon - 0.008 * sf}],
-      [${activeLat + 0.014 * sf}, ${activeLon + 0.004 * sf}],
-      [${activeLat + 0.005 * sf}, ${activeLon + 0.013 * sf}],
-      [${activeLat - 0.009 * sf}, ${activeLon + 0.011 * sf}],
-      [${activeLat - 0.013 * sf}, ${activeLon - 0.002 * sf}],
-      [${activeLat - 0.005 * sf}, ${activeLon - 0.012 * sf}]
+      [${activeLat + 0.011 * spreadFactor}, ${activeLon - 0.008 * spreadFactor}],
+      [${activeLat + 0.014 * spreadFactor}, ${activeLon + 0.004 * spreadFactor}],
+      [${activeLat + 0.005 * spreadFactor}, ${activeLon + 0.013 * spreadFactor}],
+      [${activeLat - 0.009 * spreadFactor}, ${activeLon + 0.011 * spreadFactor}],
+      [${activeLat - 0.013 * spreadFactor}, ${activeLon - 0.002 * spreadFactor}],
+      [${activeLat - 0.005 * spreadFactor}, ${activeLon - 0.012 * spreadFactor}]
     ];
     L.polygon(outerFloodZone, { color: '#0284c7', weight: 1.5, fillColor: '#38bdf8', fillOpacity: 0.35, interactive: false }).addTo(map);
 
     var midFloodZone = [
-      [${activeLat + 0.0065 * sf}, ${activeLon - 0.0045 * sf}],
-      [${activeLat + 0.0085 * sf}, ${activeLon + 0.003 * sf}],
-      [${activeLat + 0.002 * sf}, ${activeLon + 0.0085 * sf}],
-      [${activeLat - 0.0065 * sf}, ${activeLon + 0.007 * sf}],
-      [${activeLat - 0.008 * sf}, ${activeLon - 0.0015 * sf}],
-      [${activeLat - 0.0025 * sf}, ${activeLon - 0.007 * sf}]
+      [${activeLat + 0.0065 * spreadFactor}, ${activeLon - 0.0045 * spreadFactor}],
+      [${activeLat + 0.0085 * spreadFactor}, ${activeLon + 0.003 * spreadFactor}],
+      [${activeLat + 0.002 * spreadFactor}, ${activeLon + 0.0085 * spreadFactor}],
+      [${activeLat - 0.0065 * spreadFactor}, ${activeLon + 0.007 * spreadFactor}],
+      [${activeLat - 0.008 * spreadFactor}, ${activeLon - 0.0015 * spreadFactor}],
+      [${activeLat - 0.0025 * spreadFactor}, ${activeLon - 0.007 * spreadFactor}]
     ];
     L.polygon(midFloodZone, { color: '#f59e0b', weight: 1.5, fillColor: '#facc15', fillOpacity: 0.45, interactive: false }).addTo(map);
 
     var coreDeepZone = [
-      [${activeLat + 0.003 * sf}, ${activeLon - 0.002 * sf}],
-      [${activeLat + 0.004 * sf}, ${activeLon + 0.0025 * sf}],
-      [${activeLat - 0.001 * sf}, ${activeLon + 0.0055 * sf}],
-      [${activeLat - 0.0055 * sf}, ${activeLon + 0.004 * sf}],
-      [${activeLat - 0.0045 * sf}, ${activeLon - 0.002 * sf}]
+      [${activeLat + 0.003 * spreadFactor}, ${activeLon - 0.002 * spreadFactor}],
+      [${activeLat + 0.004 * spreadFactor}, ${activeLon + 0.0025 * spreadFactor}],
+      [${activeLat - 0.001 * spreadFactor}, ${activeLon + 0.0055 * spreadFactor}],
+      [${activeLat - 0.0055 * spreadFactor}, ${activeLon + 0.004 * spreadFactor}],
+      [${activeLat - 0.0045 * spreadFactor}, ${activeLon - 0.002 * spreadFactor}]
     ];
     L.polygon(coreDeepZone, { color: '#dc2626', weight: 2, fillColor: '#ef4444', fillOpacity: 0.55, interactive: false }).addTo(map);
     `
