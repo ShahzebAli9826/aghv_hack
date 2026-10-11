@@ -1,0 +1,6 @@
+NATIONAL DISASTER MANAGEMENT AUTHORITY (NDMA) — INDIA
+STANDARD OPERATING PROCEDURE: URBAN & RIVERINE FLOOD RESPONSE (BIHAR / GANGA-KOSI BASIN)
+1. Early Warning & Triggers: When CWC / GloFAS river discharge exceeds warning thresholds or 5-day antecedent rainfall exceeds 90mm, activate District Emergency Operations Centres (DEOC).
+2. Evacuation & Depth Thresholds: Roads with water depth >= 0.30m are impassable to standard civilian vehicles (risk of engine stall and vehicle buoyancy). Deploy NDRF inflatable motorized boats (IRB) for zones with predicted depth > 0.30m.
+3. Shelter Allocation: Prioritize vulnerable clusters using Topographic Wetness Index (TWI) and elevation safety scores. Ensure potable water (15L/person/day), ORS packets, chlorine tablets, and female-safe sanitation blocks.
+4. SACHET CAP v1.2 Alerting: All public warnings must follow WMO/ITU Common Alerting Protocol (CAP v1.2) in Hindi and English with verified human-in-the-loop (HITL) authorization.
