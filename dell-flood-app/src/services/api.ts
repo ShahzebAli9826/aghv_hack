@@ -796,8 +796,16 @@ export const apiService = {
 
     // 1. Comprehensive built-in gazetteer dictionary (instant offline resolution)
     const KNOWN_CITIES: Record<string, { lat: number; lon: number; name: string }> = {
-      "delhi": { lat: 28.6139, lon: 77.2090, name: "New Delhi, Delhi, India" },
-      "new delhi": { lat: 28.6139, lon: 77.2090, name: "New Delhi, Delhi, India" },
+      "delhi": { lat: 28.6139, lon: 77.2090, name: "New Delhi (Yamuna), Delhi, India" },
+      "new delhi": { lat: 28.6139, lon: 77.2090, name: "New Delhi (Yamuna), Delhi, India" },
+      "new delhi (yamuna)": { lat: 28.6139, lon: 77.2090, name: "New Delhi (Yamuna), Delhi, India" },
+      "yamuna": { lat: 28.6139, lon: 77.2090, name: "Yamuna Floodplain, New Delhi, India" },
+      "yamuna, delhi": { lat: 28.6139, lon: 77.2090, name: "Yamuna Floodplain, New Delhi, India" },
+      "yamuna delhi": { lat: 28.6139, lon: 77.2090, name: "Yamuna Floodplain, New Delhi, India" },
+      "delhi yamuna": { lat: 28.6139, lon: 77.2090, name: "Yamuna Floodplain, New Delhi, India" },
+      "kashmere gate": { lat: 28.6675, lon: 77.2282, name: "Kashmere Gate (Yamuna Bank), Delhi, India" },
+      "ito": { lat: 28.6280, lon: 77.2410, name: "ITO Barrage (Yamuna), New Delhi, India" },
+      "okhla": { lat: 28.5450, lon: 77.3100, name: "Okhla Barrage (Yamuna), New Delhi, India" },
       "ncr": { lat: 28.6139, lon: 77.2090, name: "Delhi NCR, India" },
       "noida": { lat: 28.5355, lon: 77.3910, name: "Noida, Uttar Pradesh, India" },
       "gurugram": { lat: 28.4595, lon: 77.0266, name: "Gurugram, Haryana, India" },
@@ -807,6 +815,7 @@ export const apiService = {
       "hari nagar": { lat: 28.6253, lon: 77.1065, name: "Hari Nagar, West Delhi, Delhi, India" },
       "connaught place": { lat: 28.6315, lon: 77.2167, name: "Connaught Place, New Delhi, India" },
       "patna": { lat: 25.6124, lon: 85.1376, name: "Patna, Bihar, India" },
+      "patna, bihar": { lat: 25.6124, lon: 85.1376, name: "Patna, Bihar, India" },
       "gandhi ghat": { lat: 25.6186, lon: 85.1764, name: "Gandhi Ghat, Patna, Bihar, India" },
       "boring road": { lat: 25.6190, lon: 85.1180, name: "Boring Road, Patna, Bihar, India" },
       "kankarbagh": { lat: 25.5970, lon: 85.1480, name: "Kankarbagh, Patna, Bihar, India" },
@@ -819,8 +828,11 @@ export const apiService = {
       "charaideo": { lat: 27.0270, lon: 94.8872, name: "Charaideo, Assam, India" },
       "majuli": { lat: 26.9601, lon: 94.1802, name: "Majuli Island, Assam, India" },
       "majuli island": { lat: 26.9601, lon: 94.1802, name: "Majuli Island, Assam, India" },
+      "majuli island, assam": { lat: 26.9601, lon: 94.1802, name: "Majuli Island, Assam, India" },
       "kaziranga": { lat: 26.5775, lon: 93.1711, name: "Kaziranga, Assam, India" },
+      "kaziranga, assam": { lat: 26.5775, lon: 93.1711, name: "Kaziranga, Assam, India" },
       "jorhat": { lat: 26.7509, lon: 94.2037, name: "Jorhat, Assam, India" },
+      "jorhat, assam": { lat: 26.7509, lon: 94.2037, name: "Jorhat, Assam, India" },
       "guwahati": { lat: 26.1445, lon: 91.7362, name: "Guwahati, Assam, India" },
       "dispur": { lat: 26.1433, lon: 91.7898, name: "Dispur, Assam, India" },
       "assam": { lat: 26.1445, lon: 91.7362, name: "Assam, India" },
@@ -866,11 +878,12 @@ export const apiService = {
       "haridwar": { lat: 29.9457, lon: 78.1642, name: "Haridwar, Uttarakhand, India" },
       "kochi": { lat: 9.9312, lon: 76.2673, name: "Kochi, Kerala, India" },
       "kuttanad": { lat: 9.3547, lon: 76.4044, name: "Kuttanad, Alappuzha, Kerala, India" },
+      "kuttanad, kerala": { lat: 9.3547, lon: 76.4044, name: "Kuttanad, Alappuzha, Kerala, India" },
       "mcleod ganj": { lat: 32.2426, lon: 76.3213, name: "McLeod Ganj, Kangra, Himachal Pradesh, India" },
       "thiruvananthapuram": { lat: 8.5241, lon: 76.9366, name: "Thiruvananthapuram, Kerala, India" }
     };
 
-    const qLower = q.toLowerCase();
+    const qLower = q.toLowerCase().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
 
     // P10: Exact-token match only — never substring filter that blocks Kuttanad ("kutta") or McLeod Ganj ("mc")
     const INVALID_EXACT_TOKENS = new Set(["asdf", "qwerty"]);
@@ -878,10 +891,17 @@ export const apiService = {
       return { status: "NOT_FOUND", message: `Location "${q}" does not exist. Please search for a valid city, district, or landmark.` };
     }
 
-    // 1. Exact match in built-in dictionary
+    // 1. Exact or comma-part match in built-in dictionary
     if (KNOWN_CITIES[qLower]) {
       const val = KNOWN_CITIES[qLower];
       return { status: "SUCCESS", lat: val.lat, lon: val.lon, name: val.name };
+    }
+    const commaParts = qLower.split(',').map(s => s.trim()).filter(Boolean);
+    for (const part of commaParts) {
+      if (KNOWN_CITIES[part]) {
+        const val = KNOWN_CITIES[part];
+        return { status: "SUCCESS", lat: val.lat, lon: val.lon, name: val.name };
+      }
     }
 
     // Helper to verify Indian geographic boundaries (or explicit foreign query)
@@ -890,10 +910,11 @@ export const apiService = {
     };
 
     // 2. Query Open-Meteo Geocoding API (Fast, Free, Native CORS, No API Key required)
+    const openMeteoQuery = commaParts[0] || q;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`, {
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(openMeteoQuery)}&count=5&language=en&format=json`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -1273,24 +1294,38 @@ export const apiService = {
 
   // --- U-RNN 4D Nowcast Studio Endpoints (P29, P31, P32) ---
   async getNowcast(lat: number = 25.6124, lon: number = 85.1376, rainMmHr?: number, drainageEff: number = 65.0): Promise<any> {
-    try {
-      const q = new URLSearchParams({
-        lat: String(lat),
-        lon: String(lon),
-        drainage_eff: String(drainageEff),
-      });
-      if (rainMmHr !== undefined) q.set('rain_mm_hr', String(rainMmHr));
-      const res = await fetch(`${this.apiUrl}/nowcast?${q.toString()}`);
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.log('[Nowcast API] Fallback simulation active:', e);
+    if (!this.useMock) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4500);
+        const q = new URLSearchParams({
+          lat: String(lat),
+          lon: String(lon),
+          drainage_eff: String(drainageEff),
+        });
+        if (rainMmHr !== undefined) q.set('rain_mm_hr', String(rainMmHr));
+        const res = await fetch(`${this.apiUrl}/nowcast?${q.toString()}`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) return await res.json();
+      } catch (e) {
+        console.log('[Nowcast API] Fallback simulation active:', e);
+      }
     }
-    const baseRain = rainMmHr ?? 68.0;
-    const scale = Math.max(0.4, (baseRain / 65.0) * (1.35 - (drainageEff / 100.0) * 0.5));
-    const d0 = +(0.24 * scale).toFixed(2);
-    const d15 = +(0.38 * scale).toFixed(2);
-    const d30 = +(0.54 * scale).toFixed(2);
-    const d60 = +(0.72 * scale).toFixed(2);
+    const isDelhi = lat >= 28.3 && lat <= 28.9 && lon >= 76.8 && lon <= 77.6;
+    const isAssam = lat >= 24.5 && lat <= 27.8 && lon >= 90.0 && lon <= 96.0;
+    const baseRain = rainMmHr ?? (isDelhi ? 54.0 : isAssam ? 88.0 : 68.0);
+    const locFactor = isDelhi ? 1.12 : isAssam ? 1.25 : 1.0 + (((Math.abs(lat * 13 + lon * 7)) % 20) - 10) * 0.015;
+    const scale = Math.max(0.35, (baseRain / 65.0) * (1.35 - (drainageEff / 100.0) * 0.5) * locFactor);
+    const d0 = +(0.26 * scale).toFixed(2);
+    const d15 = +(0.41 * scale).toFixed(2);
+    const d30 = +(0.58 * scale).toFixed(2);
+    const d60 = +(0.79 * scale).toFixed(2);
+    const demMin = isDelhi ? 209.3 : isAssam ? 64.5 : 48.2;
+    const demMax = isDelhi ? 249.3 : isAssam ? 92.0 : 61.5;
+    const impervPct = isDelhi ? 74.6 : isAssam ? 42.8 : 68.4;
+    const inlets = isDelhi ? 664 : isAssam ? 184 : 256;
     return {
       status: 'SUCCESS',
       lat,
@@ -1299,10 +1334,10 @@ export const apiService = {
         inst_rain_mm_hr: baseRain,
         inst_rain_mm_min: +(baseRain / 60).toFixed(3),
         cumul_rain_24h_mm: +(baseRain * 1.45).toFixed(1),
-        dem_min_m: 48.2,
-        dem_max_m: 61.5,
-        mean_imperviousness_pct: 68.4,
-        drainage_inlet_count: 256,
+        dem_min_m: demMin,
+        dem_max_m: demMax,
+        mean_imperviousness_pct: impervPct,
+        drainage_inlet_count: inlets,
         drainage_efficiency_pct: drainageEff,
       },
       urnn_nowcast: {
@@ -1313,20 +1348,20 @@ export const apiService = {
         max_depth_30m: d30,
         max_depth_60m: d60,
         Horizon_Stats: {
-          t_0m: { horizon_minutes: 0, max_depth_m: d0, mean_depth_m: +(d0 * 0.55).toFixed(2), impassable_area_pct: +(d0 * 18).toFixed(1), clearance_status: d0 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
-          t_15m: { horizon_minutes: 15, max_depth_m: d15, mean_depth_m: +(d15 * 0.56).toFixed(2), impassable_area_pct: +(d15 * 22).toFixed(1), clearance_status: d15 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
-          t_30m: { horizon_minutes: 30, max_depth_m: d30, mean_depth_m: +(d30 * 0.58).toFixed(2), impassable_area_pct: +(d30 * 26).toFixed(1), clearance_status: d30 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
-          t_60m: { horizon_minutes: 60, max_depth_m: d60, mean_depth_m: +(d60 * 0.60).toFixed(2), impassable_area_pct: +(d60 * 31).toFixed(1), clearance_status: d60 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
+          t_0m: { horizon_minutes: 0, max_depth_m: d0, mean_depth_m: +(d0 * 0.55).toFixed(2), impassable_area_pct: +(d0 * 42).toFixed(1), clearance_status: d0 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
+          t_15m: { horizon_minutes: 15, max_depth_m: d15, mean_depth_m: +(d15 * 0.56).toFixed(2), impassable_area_pct: +(d15 * 48).toFixed(1), clearance_status: d15 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
+          t_30m: { horizon_minutes: 30, max_depth_m: d30, mean_depth_m: +(d30 * 0.58).toFixed(2), impassable_area_pct: +(d30 * 54).toFixed(1), clearance_status: d30 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
+          t_60m: { horizon_minutes: 60, max_depth_m: d60, mean_depth_m: +(d60 * 0.60).toFixed(2), impassable_area_pct: Math.min(94.5, +(d60 * 62).toFixed(1)), clearance_status: d60 >= 0.3 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV' },
         },
         heatmaps_b64: {},
       },
       dynamic_evacuation_route: {
         routing_mode: 'TIME_VARYING_URNN_DIJKSTRA',
-        distance_km: 3.1,
-        eta_minutes: 18.4,
-        avoided_flooded_nodes_count: 5,
-        dynamic_max_depth_at_arrival_m: 0.12,
-        static_max_depth_at_arrival_m: 0.48,
+        distance_km: isDelhi ? 3.8 : 3.1,
+        eta_minutes: isDelhi ? 16.5 : 18.4,
+        avoided_flooded_nodes_count: isDelhi ? 11 : 5,
+        dynamic_max_depth_at_arrival_m: 0.11,
+        static_max_depth_at_arrival_m: +(d30 * 0.85).toFixed(2),
       },
     };
   },

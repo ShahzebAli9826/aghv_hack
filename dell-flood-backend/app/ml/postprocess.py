@@ -114,11 +114,18 @@ class PostProcessor:
         filtered_mask[permanent_water] = 0
         return filtered_mask
 
+    _DEM_CACHE: Dict[Tuple[float, float], Tuple[np.ndarray, float]] = {}
+
     def fetch_real_dem(self, lat: float, lon: float) -> Tuple[np.ndarray, float]:
         """
         Fetches a real 5x5 Digital Elevation Model (DEM) grid from Open-Meteo SRTM/Copernicus DEM
         and bicubically interpolates it to a 512x512 topographic elevation surface.
         """
+        cache_key = (round(float(lat), 2), round(float(lon), 2))
+        if cache_key in self._DEM_CACHE:
+            cached_dem, cached_base = self._DEM_CACHE[cache_key]
+            return cached_dem.copy(), cached_base
+
         offsets = [0.02, 0.01, 0.0, -0.01, -0.02]
         lats = [lat + o for o in offsets]
         lons = [lon + o for o in [-0.02, -0.01, 0.0, 0.01, 0.02]]
@@ -129,13 +136,18 @@ class PostProcessor:
         try:
             url = f"https://api.open-meteo.com/v1/elevation?latitude={lat_str}&longitude={lon_str}"
             req = urllib.request.Request(url, headers={"User-Agent": "AegisFloodApp/2.0"})
-            res = json.loads(urllib.request.urlopen(req, timeout=4.0).read().decode())
+            res = json.loads(urllib.request.urlopen(req, timeout=1.8).read().decode())
             elev_list = res.get("elevation", [52.0] * 25)
             elevations = np.array(elev_list[:25], dtype=np.float32).reshape((5, 5))
         except Exception:
-            base = 640.0 if (22.5 <= lat <= 24.5 and 84.5 <= lon <= 86.5) else 53.0
+            if 28.3 <= lat <= 28.9 and 76.8 <= lon <= 77.6:
+                base = 216.0
+            elif 22.5 <= lat <= 24.5 and 84.5 <= lon <= 86.5:
+                base = 640.0
+            else:
+                base = 53.0
             y_idx, x_idx = np.meshgrid(np.linspace(-1, 1, 5), np.linspace(-1, 1, 5))
-            elevations = (base + 3.5 * y_idx - 2.5 * x_idx).astype(np.float32)
+            elevations = (base + 4.5 * y_idx - 3.5 * x_idx).astype(np.float32)
 
         base_elev = float(elevations[2, 2])
         if HAS_CV2:
@@ -143,7 +155,8 @@ class PostProcessor:
         else:
             dem_512 = np.full((512, 512), base_elev, dtype=np.float32)
 
-        return dem_512, base_elev
+        self._DEM_CACHE[cache_key] = (dem_512, base_elev)
+        return dem_512.copy(), base_elev
 
     def validate_with_dem(self, flood_mask: np.ndarray, dem_elevation: np.ndarray, base_elev: float = None) -> np.ndarray:
         min_elev = np.min(dem_elevation)

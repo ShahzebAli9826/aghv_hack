@@ -324,11 +324,18 @@ def fetch_satellite(lat: float, lon: float) -> dict:
     }
 
 
+_RAIN_CACHE = {}
+
+
 def check_rainfall_detailed(lat: float, lon: float) -> dict:
     """
     Separates observed 5-day antecedent precipitation from 24-hour forecast precipitation
     using Open-Meteo and OpenWeatherMap (Solves P22).
     """
+    cache_key = (round(float(lat), 2), round(float(lon), 2))
+    if cache_key in _RAIN_CACHE:
+        return dict(_RAIN_CACHE[cache_key])
+
     antecedent_5d_mm = 0.0
     forecast_24h_mm = 0.0
     peak_intensity_mm_hr = 15.0
@@ -338,7 +345,7 @@ def check_rainfall_detailed(lat: float, lon: float) -> dict:
             f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
             f"&daily=precipitation_sum&hourly=precipitation&past_days=5&forecast_days=2&timezone=auto"
         )
-        res = requests.get(url, timeout=4)
+        res = requests.get(url, timeout=1.8)
         if res.status_code == 200:
             data = res.json()
             daily = data.get("daily", {}).get("precipitation_sum", [])
@@ -353,12 +360,14 @@ def check_rainfall_detailed(lat: float, lon: float) -> dict:
     except Exception as e:
         print(f"[Rainfall Detailed] Open-Meteo error: {e}")
 
-    return {
+    result = {
         "antecedent_rain_5d_mm": round(antecedent_5d_mm, 1),
         "forecast_rain_24h_mm": round(forecast_24h_mm, 1),
         "total_window_rain_mm": round(antecedent_5d_mm + forecast_24h_mm, 1),
         "peak_intensity_mm_hr": round(peak_intensity_mm_hr, 1),
     }
+    _RAIN_CACHE[cache_key] = result
+    return dict(result)
 
 
 def check_rainfall(lat: float, lon: float) -> float:
