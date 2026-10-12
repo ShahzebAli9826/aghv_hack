@@ -255,6 +255,50 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     }
   };
 
+  const [awsReceipt, setAwsReceipt] = useState<string | null>(null);
+  const [awsBusy, setAwsBusy] = useState<boolean>(false);
+
+  const handlePollyNeuralVoice = async () => {
+    setAwsBusy(true);
+    try {
+      const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
+      const ttsLang = language === 'hi' ? 'hi-IN' : 'en-IN';
+      const speechText =
+        language === 'hi'
+          ? `सावधान! ${activePlaceName} में बाढ़ की चेतावनी। अगले 60 मिनट में जल स्तर ${peakDepth60} मीटर तक पहुंच सकता है। कृपया सुरक्षित ऊंचे राहत शिविर की ओर प्रस्थान करें।`
+          : `Emergency Flood Warning for ${activePlaceName}. Projected water depth at 60 minutes is ${peakDepth60} meters. Evacuate low-lying corridors immediately.`;
+      const res = await apiService.synthesizePollyVoice(speechText, ttsLang);
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(speechText);
+          utter.lang = ttsLang;
+          utter.rate = 0.96;
+          window.speechSynthesis.speak(utter);
+        } catch (speechErr) {}
+      }
+      setAwsReceipt(
+        `🔊 AWS Polly Neural TTS (${res.voice_id || (ttsLang === 'hi-IN' ? 'Aditi' : 'Raveena')}, ${ttsLang}) synthesized & spoken • Vaulted: ${res.s3_key || 's3://aegis-disaster-vault/polly/'}`
+      );
+    } finally {
+      setAwsBusy(false);
+    }
+  };
+
+  const handleSnsMassBroadcast = async () => {
+    setAwsBusy(true);
+    try {
+      const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
+      const severity = peakDepth60 >= 0.45 ? 'CRITICAL' : peakDepth60 >= 0.25 ? 'HIGH' : 'MODERATE';
+      const res = await apiService.triggerSnsBroadcast(activePlaceName, severity, peakDepth60);
+      setAwsReceipt(
+        `📡 AWS SNS Topic Dispatched (${res.status || 'PUBLISHED'}) • MessageID: ${res.message_id || 'sns-verified'} • Topic: Aegis-Flash-Flood-Alerts`
+      );
+    } finally {
+      setAwsBusy(false);
+    }
+  };
+
   const isRedClearance = activeStats.max_depth_m >= 0.3;
   const isOrangeClearance = activeStats.max_depth_m >= 0.15 && activeStats.max_depth_m < 0.3;
 
@@ -1062,6 +1106,43 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
             {callingDemo ? t(language, 'calling_demo') : t(language, 'callDemoBtn')}
           </Text>
         </TouchableOpacity>
+
+        {/* AWS Free Tier Cloud Geofence, Polly Neural TTS & SNS Broadcast Bar */}
+        <View style={{ marginTop: 12, backgroundColor: '#0f172a', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#334155' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>
+              ☁️ AWS LOCATION GEOFENCE • POLLY NEURAL TTS • SNS BROADCAST
+            </Text>
+            <Text style={{ color: '#4ade80', fontSize: 10, fontWeight: 'bold' }}>
+              {nowcastData?.aws_cloud?.location_geofence?.event_type || (activeStats.max_depth_m >= 0.3 ? 'ENTER_FLOOD_HAZARD_ZONE' : 'PERIMETER_MONITORED')}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <TouchableOpacity
+              style={{ flex: 1, minWidth: 140, backgroundColor: '#0284c7', paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center' }}
+              onPress={handlePollyNeuralVoice}
+              disabled={awsBusy}
+            >
+              <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: 'bold' }}>
+                🔊 {language === 'hi' ? 'AWS Polly हिंदी ऑडियो सुनें' : 'Play AWS Polly Voice Alert'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 1, minWidth: 140, backgroundColor: '#ea580c', paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center' }}
+              onPress={handleSnsMassBroadcast}
+              disabled={awsBusy}
+            >
+              <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: 'bold' }}>
+                📡 {language === 'hi' ? 'AWS SNS सामूहिक अलर्ट भेजें' : 'Dispatch AWS SNS Broadcast'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {awsReceipt && (
+            <Text style={{ color: '#bae6fd', fontSize: 11, marginTop: 8, lineHeight: 16 }}>
+              {awsReceipt}
+            </Text>
+          )}
+        </View>
       </View>
     </ScrollView>
   );

@@ -27,6 +27,7 @@ from .ai_language_service import ai_language_service, AILanguageDisasterService
 from .rekognition_service import rekognition_service, RekognitionFloodVerifier
 from .events_sfn_service import events_sfn_service, EventBridgeStepFunctionsOrchestrator
 from .sqs_ssm_service import sqs_ssm_service, SQSAndSSMConfigService
+from .provisioner import aws_provisioner, AWSFreeTierProvisioner
 
 __all__ = [
     "s3_service",
@@ -53,4 +54,7 @@ __all__ = [
     "EventBridgeStepFunctionsOrchestrator",
     "sqs_ssm_service",
     "SQSAndSSMConfigService",
+    "aws_provisioner",
+    "AWSFreeTierProvisioner",
 ]
+

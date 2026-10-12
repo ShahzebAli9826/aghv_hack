@@ -29,6 +29,7 @@ from app.aws import (
     rekognition_service,
     events_sfn_service,
     sqs_ssm_service,
+    aws_provisioner,
 )
 
 mcp_router = APIRouter(prefix="/api/mcp", tags=["Aegis Formal MCP Server"])
@@ -403,6 +404,17 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         "requires_official_approval": False,
     },
     {
+        "name": "aws_provision_free_tier_resources",
+        "description": "AWS Free Tier Infrastructure Provisioner MCP Tool: Idempotently creates or verifies the S3 bucket, DynamoDB tables (PAY_PER_REQUEST), SNS topic, SQS FIFO queue, and SSM parameters when AWS credentials are configured, or returns a zero-error simulation blueprint offline.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run": {"type": "boolean"},
+            },
+        },
+        "requires_official_approval": False,
+    },
+    {
         "name": "aws_run_free_tier_diagnostic_suite",
         "description": "AWS Agent Toolkit Master MCP Tool: Executes an end-to-end integration test across all 12 AWS Free Tier services via MCP and returns a signed verification report.",
         "inputSchema": {
@@ -760,6 +772,9 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         else:
             data = sqs_ssm_service.get_operational_parameters()
 
+    elif tool_name == "aws_provision_free_tier_resources":
+        data = aws_provisioner.provision_all()
+
     elif tool_name == "aws_run_free_tier_diagnostic_suite":
         suite_t0 = time.perf_counter()
         sub_tools = [
@@ -777,6 +792,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon Rekognition", "aws_verify_flood_photo_rekognition", {"image_path": "./delhi_optical.png", "claimed_severity": "CRITICAL", "location": location}),
             ("EventBridge & Step Functions", "aws_orchestrate_step_functions", {"location": location, "lat": lat, "lon": lon, "severity": "CRITICAL"}),
             ("Amazon SQS & AWS SSM", "aws_queue_and_ssm_config", {"action": "enqueue_sos", "sos_payload": {"location": location, "severity": "CRITICAL"}}),
+            ("AWS Free Tier Provisioner", "aws_provision_free_tier_resources", {"dry_run": False}),
         ]
         results_matrix = []
         for svc_label, sub_name, sub_args in sub_tools:

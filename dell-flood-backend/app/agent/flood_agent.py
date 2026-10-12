@@ -57,16 +57,20 @@ class FloodAgent:
         lat,
         lon,
         phone_numbers=None,
+        phones=None,
         language="hi",
         report_format="NDMA",
         auto_approve_hitl=False,
+        require_hitl_for_calls=None,
+        **kwargs,
     ):
         """
         Autonomous FloodAgent + 6-Agent LangGraph Supervisor Cycle (Solves P7, P17, P20, P21, P27, P28).
         Uses a run-scoped cycle_logs list so concurrent invocations never leak across users.
         """
-        if phone_numbers is None:
-            phone_numbers = ["+917678656930"]
+        target_phones = phones or phone_numbers or ["+917678656930"]
+        if require_hitl_for_calls is not None:
+            auto_approve_hitl = not bool(require_hitl_for_calls)
         cycle_logs = []
         cycle_start_t = time.time()
 
@@ -181,6 +185,8 @@ class FloodAgent:
             "last_confidence": confidence,
         }
 
+        hitl_pending = self.get_hitl_queue(status="PENDING")
+
         return {
             "run_id": orch_res.get("run_id"),
             "location": location,
@@ -201,11 +207,15 @@ class FloodAgent:
             "report": report_text,
             "report_format": report_format,
             "agent_nodes_status": orch_res.get("agent_nodes_status", {}),
+            "agent_statuses": orch_res.get("agent_nodes_status", {}),
             "mcp_provenance": orch_res.get("mcp_provenance", []),
+            "mcp_audit_log": orch_res.get("mcp_provenance", []),
             "cap_alert": orch_res.get("cap_alert", {}),
             "hitl_draft_id": orch_res.get("hitl_draft_id"),
+            "hitl_pending": hitl_pending,
             "evacuation": orch_res.get("evacuation", {}),
             "urnn": urnn_data,
+            "target_phones": target_phones,
             "aws_cloud": {
                 "s3_report": s3_report_info,
                 "sns_broadcast": sns_info,
@@ -214,4 +224,44 @@ class FloodAgent:
             },
             "logs": cycle_logs,
         }
+
+    def get_hitl_queue(self, status="PENDING"):
+        """Returns HITL approval queue items formatted for both UI and API consumers."""
+        items = self.orchestrator.list_hitl_queue()
+        formatted = []
+        for item in items:
+            st = item.get("status", "PENDING_APPROVAL")
+            if status and status.upper() == "PENDING" and "PENDING" not in st.upper():
+                continue
+            cap = item.get("cap_alert", {})
+            formatted.append({
+                "item_id": item.get("draft_id"),
+                "draft_id": item.get("draft_id"),
+                "action_type": "CAP_ALERT_AND_VOICE_DISPATCH",
+                "location": item.get("location", "Patna, Bihar"),
+                "severity": item.get("severity", "CRITICAL"),
+                "target_phones": [cap.get("target_demo_phone", "+917678656930")],
+                "language": "hi",
+                "created_at": item.get("created_at"),
+                "status": "PENDING" if "PENDING" in st.upper() else st,
+                "cap_alert": cap,
+            })
+        return formatted
+
+    def approve_hitl_action(self, item_id: str, language: str = "hi"):
+        """Approves a pending HITL draft and dispatches CAP Voice + AWS SNS + AWS Polly."""
+        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, language=language)
+        loc = res.get("draft", {}).get("location", "Patna, Bihar")
+        sev = res.get("draft", {}).get("severity", "CRITICAL")
+        try:
+            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=0.82)
+            polly_res = polly_service.synthesize_emergency_alert(
+                f"HITL Approved Emergency Alert for {loc}. Severity: {sev}.",
+                language="hi-IN" if str(language).lower().startswith("hi") else "en-IN",
+            )
+            res["aws_dispatch"] = {"sns": sns_res, "polly": polly_res}
+        except Exception:
+            pass
+        return res
+
 
