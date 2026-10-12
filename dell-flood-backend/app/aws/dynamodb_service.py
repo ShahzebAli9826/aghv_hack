@@ -133,5 +133,100 @@ class DynamoDBTelemetryStore:
         cache = self._load_local_cache()
         return cache.get("reports", [])[:limit]
 
+    def put_emergency_shelter(self, shelter_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Persists or updates an emergency relief shelter in Amazon DynamoDB (`Aegis-Emergency-Shelters`)."""
+        shelter_id = str(shelter_data.get("shelter_id") or f"SHL-{uuid.uuid4().hex[:6].upper()}")
+        item = {
+            "shelter_id": shelter_id,
+            "name": str(shelter_data.get("name", "Gandhi Maidan High-Ground NDRF Relief Camp")),
+            "district": str(shelter_data.get("district", "Patna District")),
+            "latitude": float(shelter_data.get("latitude", 25.6185)),
+            "longitude": float(shelter_data.get("longitude", 85.1412)),
+            "elevation_m": float(shelter_data.get("elevation_m", 58.4)),
+            "capacity": int(shelter_data.get("capacity", 1200)),
+            "current_occupancy": int(shelter_data.get("current_occupancy", 430)),
+            "medical_unit_active": bool(shelter_data.get("medical_unit_active", True)),
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        cache = self._load_local_cache()
+        shelters = cache.setdefault("shelters", [])
+        shelters = [s for s in shelters if s.get("shelter_id") != shelter_id]
+        shelters.insert(0, item)
+        cache["shelters"] = shelters[:50]
+        self._save_local_cache(cache)
+
+        if self.enabled and self._dynamodb:
+            try:
+                table = self._dynamodb.Table(self.shelters_table_name)
+                table.put_item(Item=_convert_floats_to_decimal(item))
+                return {"status": "SAVED_TO_DYNAMODB", "table": self.shelters_table_name, "shelter": item}
+            except Exception as e:
+                logger.warning(f"DynamoDB shelter put_item fallback: {e}")
+
+        return {"status": "SAVED_TO_LOCAL_CACHE", "table": self.shelters_table_name, "shelter": item}
+
+    def list_emergency_shelters(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Lists emergency relief shelters from Amazon DynamoDB (`Aegis-Emergency-Shelters`)."""
+        if self.enabled and self._dynamodb:
+            try:
+                table = self._dynamodb.Table(self.shelters_table_name)
+                resp = table.scan(Limit=limit)
+                items = [_convert_decimals_to_floats(i) for i in resp.get("Items", [])]
+                if items:
+                    return items
+            except Exception as e:
+                logger.warning(f"DynamoDB shelter scan fallback: {e}")
+
+        cache = self._load_local_cache()
+        shelters = cache.get("shelters", [])
+        if not shelters:
+            default_shelters = [
+                {
+                    "shelter_id": "SHL-PATNA-01",
+                    "name": "Gandhi Maidan High-Ground NDRF Relief Camp",
+                    "district": "Patna District",
+                    "latitude": 25.6185,
+                    "longitude": 85.1412,
+                    "elevation_m": 58.4,
+                    "capacity": 1500,
+                    "current_occupancy": 620,
+                    "medical_unit_active": True,
+                },
+                {
+                    "shelter_id": "SHL-ASSAM-01",
+                    "name": "Jorhat Government Stadium High-Elevation Shelter",
+                    "district": "Jorhat, Assam",
+                    "latitude": 26.7540,
+                    "longitude": 94.2090,
+                    "elevation_m": 118.2,
+                    "capacity": 2000,
+                    "current_occupancy": 890,
+                    "medical_unit_active": True,
+                },
+            ]
+            cache["shelters"] = default_shelters
+            self._save_local_cache(cache)
+            return default_shelters
+        return shelters[:limit]
+
+    def record_mcp_audit_entry(self, provenance_entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Persists an MCP tool execution provenance record to DynamoDB (`Aegis-MCP-Audit-Ledger`)."""
+        audit_table_name = os.getenv("AWS_DYNAMODB_MCP_AUDIT_TABLE", "Aegis-MCP-Audit-Ledger")
+        cache = self._load_local_cache()
+        ledger = cache.setdefault("mcp_audit_ledger", [])
+        ledger.insert(0, provenance_entry)
+        cache["mcp_audit_ledger"] = ledger[:100]
+        self._save_local_cache(cache)
+
+        if self.enabled and self._dynamodb:
+            try:
+                table = self._dynamodb.Table(audit_table_name)
+                table.put_item(Item=_convert_floats_to_decimal(provenance_entry))
+                return {"status": "SAVED_TO_DYNAMODB", "table": audit_table_name}
+            except Exception:
+                pass
+        return {"status": "SAVED_TO_LOCAL_CACHE", "table": audit_table_name}
+
 
 dynamodb_service = DynamoDBTelemetryStore()
+

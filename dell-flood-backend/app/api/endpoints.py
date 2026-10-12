@@ -2560,8 +2560,21 @@ class PollySynthesizeRequest(BaseModel):
 
 @router.get("/aws/status")
 def get_aws_integration_status():
-    """Returns real-time status of all 8 integrated AWS Free Tier services and AWS MCP Server."""
-    from app.aws import s3_service, dynamodb_service, sns_service, polly_service, cognito_service, cloudwatch_service
+    """Returns real-time status of all 12 integrated AWS Free Tier services and AWS MCP Server."""
+    from app.aws import (
+        s3_service,
+        dynamodb_service,
+        sns_service,
+        polly_service,
+        cognito_service,
+        cloudwatch_service,
+        bedrock_service,
+        location_service,
+        ai_language_service,
+        rekognition_service,
+        events_sfn_service,
+        sqs_ssm_service,
+    )
     from app.mcp.aegis_mcp_server import MCP_TOOLS_REGISTRY
 
     aws_mcp_tools = [t["name"] for t in MCP_TOOLS_REGISTRY if t["name"].startswith("aws_")]
@@ -2570,6 +2583,7 @@ def get_aws_integration_status():
         "region": s3_service.region,
         "aws_credentials_configured": s3_service.enabled,
         "mode": "AWS_LIVE_CLOUD" if s3_service.enabled else "HYBRID_LOCAL_SIMULATION_READY",
+        "total_aws_mcp_tools": len(aws_mcp_tools),
         "services": {
             "amazon_s3": {
                 "service": "Amazon S3",
@@ -2581,9 +2595,13 @@ def get_aws_integration_status():
             "amazon_dynamodb": {
                 "service": "Amazon DynamoDB",
                 "tier": "25 GB + 25 RCU/WCU (Always Free Forever)",
-                "tables": [dynamodb_service.reports_table_name, dynamodb_service.shelters_table_name],
+                "tables": [
+                    dynamodb_service.reports_table_name,
+                    dynamodb_service.shelters_table_name,
+                    "Aegis-MCP-Audit-Ledger",
+                ],
                 "live": dynamodb_service.enabled,
-                "role": "Serverless Citizen Ground Reports & Shelter Telemetry",
+                "role": "Serverless Citizen Ground Reports, Shelters & MCP Audit Ledger",
             },
             "amazon_sns": {
                 "service": "Amazon SNS",
@@ -2613,6 +2631,51 @@ def get_aws_integration_status():
                 "live": cloudwatch_service.enabled,
                 "role": "Live Flood Severity, Latency & Evacuation Route Telemetry",
             },
+            "amazon_bedrock": {
+                "service": "Amazon Bedrock & Knowledge Bases",
+                "tier": "Pay-per-token / $200 AWS Credits (~$0.0007/report)",
+                "model_id": bedrock_service.model_id,
+                "live": bedrock_service.enabled,
+                "role": "Claude 3 Haiku Grounded SITREP LLM & NDMA SOP Vector RAG",
+            },
+            "amazon_location": {
+                "service": "Amazon Location Service",
+                "tier": "10K Geocode + 10K Routes + 10K Geofences/mo (Free Tier)",
+                "resources": [
+                    location_service.place_index,
+                    location_service.route_calculator,
+                    location_service.geofence_collection,
+                ],
+                "live": location_service.enabled,
+                "role": "Village Geocoding, Evacuation Routing & Flood Geofence Evaluation",
+            },
+            "amazon_translate_comprehend": {
+                "service": "Amazon Translate & Comprehend",
+                "tier": "2M Chars Translate + 50K Units Comprehend (12-Mo Free Tier)",
+                "languages": ["hi", "as", "bn", "or", "mr", "ta", "en"],
+                "live": ai_language_service.enabled,
+                "role": "7-Language Regional CAP Translation & Citizen SOS Urgency Triage",
+            },
+            "amazon_rekognition": {
+                "service": "Amazon Rekognition",
+                "tier": "5,000 Images/mo (12-Mo Free Tier)",
+                "live": rekognition_service.enabled,
+                "role": "Crowdsourced Citizen Flood Photo Label Verification & Anti-Spoofing",
+            },
+            "amazon_eventbridge_sfn": {
+                "service": "Amazon EventBridge & AWS Step Functions",
+                "tier": "14M Events + 4,000 State Transitions/mo (Always Free Forever)",
+                "event_bus": events_sfn_service.event_bus_name,
+                "live": events_sfn_service.enabled,
+                "role": "Event-Driven 6-Agent Disaster State Machine Orchestration",
+            },
+            "amazon_sqs_ssm": {
+                "service": "Amazon SQS FIFO & AWS SSM Parameter Store",
+                "tier": "1M SQS Requests + 10K SSM Parameters (Always Free Forever)",
+                "queue_url": sqs_ssm_service.queue_url,
+                "live": sqs_ssm_service.enabled,
+                "role": "Flash-Flood SOS Burst Queuing & Dynamic Operational Thresholds",
+            },
             "amazon_cloudfront": {
                 "service": "Amazon CloudFront + S3 Web",
                 "tier": "1 TB Data Transfer + 10M Requests (12-Mo Free Tier)",
@@ -2625,7 +2688,7 @@ def get_aws_integration_status():
                 "tier": "Open Source / Free",
                 "endpoint": "/api/mcp/tools",
                 "aws_mcp_tools": aws_mcp_tools,
-                "role": "IAM-Guarded & CloudWatch-Audited Agent Tool Execution",
+                "role": "IAM-Guarded & CloudWatch/DynamoDB-Audited Agent Tool Execution",
             },
         },
     }
@@ -2668,5 +2731,20 @@ def list_dynamodb_ground_reports(limit: int = 50):
     from app.aws import dynamodb_service
     items = dynamodb_service.list_citizen_reports(limit=limit)
     return {"status": "SUCCESS", "count": len(items), "items": items}
+
+
+@router.post("/aws/test-mcp-suite")
+def run_aws_free_tier_mcp_diagnostic_suite(
+    location: str = "Patna District",
+    lat: float = 25.6124,
+    lon: float = 85.1376,
+):
+    """Executes all 14 AWS Free Tier MCP tools via the formal Aegis MCP Server and returns the signed verification matrix."""
+    from app.mcp.aegis_mcp_server import execute_mcp_tool
+    return execute_mcp_tool(
+        "aws_run_free_tier_diagnostic_suite",
+        {"location": location, "lat": lat, "lon": lon},
+    )
+
 
 
