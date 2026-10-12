@@ -34,7 +34,7 @@
    - [16 AWS MCP Tools Reference](#16-aws-free-tier-mcp-tools-reference)
    - [JSON-RPC 2.0 stdio Transport Configuration (`.mcp.json`)](#json-rpc-20-stdio-transport-configuration-mcpjson)
    - [MCP Automated E2E Verification Suite](#mcp-automated-e2e-verification-suite)
-5. [Deep Learning & Physical Hydrology Engine](#-deep-learning--physical-hydrology-engine)
+5. [Deep Learning Architecture & Physical Hydrology Engine](#-deep-learning-architecture--pipeline)
    - [SegFormer MiT-B2 Dual-Encoder Satellite Fusion](#segformer-mit-b2-dual-encoder-satellite-fusion)
    - [MirEye Physical Intelligence & TWI Hydrology](#mireye-physical-intelligence--twi-hydrology)
    - [4D Spatiotemporal ConvGRU Depth Nowcasting](#4d-spatiotemporal-convgru-depth-nowcasting)
@@ -42,10 +42,11 @@
    - [Empirical Validation: Naive vs. Context-Aware Routing](#empirical-validation-naive-vs-context-aware-routing)
 6. [Autonomous 6-Agent LangGraph Pipeline & HITL](#-autonomous-6-agent-langgraph-pipeline--hitl)
 7. [Cross-Platform Mobile & Web Tactical Interface](#-cross-platform-mobile--web-tactical-interface)
+   - [Tactical Disaster Map Visualizations](#-tactical-disaster-map-visualizations)
 8. [Complete REST API Reference](#-complete-rest-api-reference)
-9. [Installation & Quickstart Guide](#-installation--quickstart-guide)
-10. [Environment Configuration Reference (`.env`)](#-environment-configuration-reference-env)
-11. [Empirical Benchmarks & Verification Output](#-empirical-benchmarks--verification-output)
+9. [Repository Structure](#-repository-structure)
+10. [Installation & Quickstart Guide](#-installation--quickstart-guide)
+11. [Environment Configuration Reference (`.env`)](#-environment-configuration-reference-env)
 12. [Security, Privacy & Resilience](#-security-privacy--resilience)
 13. [License & Acknowledgments](#-license--acknowledgments)
 
@@ -401,7 +402,49 @@ ALL AWS FREE TIER SERVICES & MCP TRANSPORT TESTS PASSED 100%!
 
 ---
 
-## 🔬 Deep Learning & Physical Hydrology Engine
+## 🔬 Deep Learning Architecture & Pipeline
+
+Aegis implements a custom **Dual-Encoder Multimodal SegFormer architecture** specifically optimized for high-precision flood boundary delineation in challenging weather and all-terrain scenarios, paired with a **4D Multi-Scale ConvGRU spatiotemporal nowcaster**.
+
+![AEGIS Deep Learning Architecture & Pipeline](assets/architecture_pipeline.png)
+
+### System Architecture Flow
+
+```
+ [Satellite SAR + Optical] ──► [NDWI Filter] ──► [Clean GeoJSON Inundation Mask]
+                                                        │
+                                                        ▼
+                                            [Mireye Physical API]
+                                    (DEM Elev, Slope, Floodplains, POIs)
+                                                        │
+                         ┌──────────────────────────────┴──────────────────────────────┐
+                         ▼                                                             ▼
+         [Predictive TWI Hydrology Layer]                            [DBSCAN Population Clustering]
+              Flash-Flood Pooling Basins                                      │
+                         │                                                             ▼
+                         └──────────────────────────────┬──────────────────────────────┘
+                                                        ▼
+                                    [Elevation-Weighted Road Graph]
+                                      (NetworkX / Dijkstra Routing)
+                                                        │
+                                                        ▼
+                                       [Multi Criteria Triage Engine]
+                                   Priority = Pop × (1 + Exp) / Elev_Safety
+                                                        │
+                                                        ▼
+                                   [In Flight Feedback Interceptor]
+                                (LangGraph: SHELTER_FULL / ROAD_CLOSED)
+                                                        │
+                         ┌──────────────────────────────┴──────────────────────────────┐
+                         ▼                                                             ▼
+         [Incident Commander Dashboard & SITREP]                      [Geo Targeted Citizen SMS / Twilio Voice]
+```
+
+**Core Innovation: What Aegis Solves**
+
+<img width="331" height="302" alt="image" src="https://github.com/user-attachments/assets/675f372e-c163-436f-878d-a582e7b2e31a" />   
+
+---
 
 ### SegFormer MiT-B2 Dual-Encoder Satellite Fusion
 
@@ -505,6 +548,16 @@ Built using **React Native & Expo SDK 57**, the frontend provides a unified inte
 - **Bilingual Support:** Instant toggling between English and Hindi (`hi`).
 - **Live AWS Telemetry Dashboard:** Real-time visibility into AWS Free Tier status, MCP execution ledger, and CloudWatch metrics.
 
+### 🗺️ Tactical Disaster Map Visualizations
+
+Aegis renders **100% watermark-free, high-contrast Folium & Leaflet maps** built specifically for emergency management operations. Every map view incorporates an interactive Disaster HUD legend and multi-layer toggles:
+
+* **Active Inundation Footprint:** High-contrast danger polygon extracted via dual-encoder SAR/Optical satellite imagery.
+* **Critical Runoff Nodes:** Glowing magenta markers identifying concave terrain basins with high TWI scores prone to flash pooling.
+* **Affected Neighborhood Centroids:** High-contrast targets displaying population estimates and building counts from DBSCAN clustering.
+* **Safe Emergency Shelters:** Emerald pins indicating safe facilities tagged with ground DEM elevation.
+* **Elevation-Weighted Evacuation Paths:** Cyan polyline corridors steering clear of flood-prone road segments.
+
 ---
 
 ## 🌐 Complete REST API Reference
@@ -543,6 +596,85 @@ The FastAPI backend exposes comprehensive REST endpoints alongside the formal MC
 |---|---|---|
 | `GET` | `/api/hitl/queue` | Lists pending disaster action drafts awaiting official commander approval. |
 | `POST` | `/api/hitl/approve` | Approves a pending draft and dispatches CAP Voice + AWS SNS + Polly. |
+
+---
+
+## 📁 Repository Structure
+
+```
+Aegis/
+├── assets/                                 # Architecture diagrams, banners, and schematics
+│   ├── architecture_pipeline.png           # Deep learning SegFormer + nowcaster pipeline diagram
+│   ├── dashboard-hero-banner.jpg           # Dashboard visual assets
+│   ├── dashboard-map-preview.jpg           # High-contrast disaster HUD preview
+│   └── dashboard-map-cropped.jpg           # Cropped tactical map preview
+│
+├── dell-flood-backend/                     # FastAPI Backend, AWS Cloud Services & AI Pipeline
+│   ├── app/
+│   │   ├── aegis/                          # Core Hydrology, Routing & Detection
+│   │   │   ├── api/                        # MirEye & Elevation API Clients
+│   │   │   ├── decision_engine/            # Triage & In-flight feedback interceptors
+│   │   │   ├── pipeline/                   # TWI hydrology & DBSCAN clustering
+│   │   │   ├── routing/                    # Elevation-penalized Dijkstra route engine
+│   │   │   └── shelters/                   # Safe shelter discovery & ranking
+│   │   ├── agent/                          # Autonomous 6-Agent LangGraph System
+│   │   │   ├── flood_agent.py              # Main Agent Orchestrator & HITL Dispatcher
+│   │   │   ├── graph.py                    # LangGraph workflow definition
+│   │   │   └── tools.py                    # Dispatch, SMS, and Twilio voice call tools
+│   │   ├── api/                            # REST Endpoints
+│   │   │   └── endpoints.py                # Pipeline, nowcast, alerts, complaints, AWS endpoints
+│   │   ├── aws/                            # 12 AWS Free Tier Cloud Services (Dual-Mode)
+│   │   │   ├── __init__.py                 # AWS package export & service singleton factory
+│   │   │   ├── s3_service.py               # Amazon S3 SITREP vault & pre-signed URLs
+│   │   │   ├── dynamodb_service.py         # Amazon DynamoDB reports, shelters & audit ledger
+│   │   │   ├── sns_service.py              # Amazon SNS CAP v1.2 mass SMS & alert broadcasts
+│   │   │   ├── polly_service.py            # Amazon Polly neural Hindi/English voice alerts
+│   │   │   ├── cognito_service.py          # Amazon Cognito OIDC/JWT RBAC token verifier
+│   │   │   ├── cloudwatch_service.py       # Amazon CloudWatch telemetry & custom metrics
+│   │   │   ├── bedrock_service.py          # Amazon Bedrock Claude 3 Haiku SITREP LLM & KB RAG
+│   │   │   ├── location_service.py         # Amazon Location Service geocoding, routes & geofences
+│   │   │   ├── ai_language_service.py      # Amazon Translate (7 langs) & Comprehend SOS NLP
+│   │   │   ├── rekognition_service.py      # Amazon Rekognition photo verification & anti-spoofing
+│   │   │   ├── events_sfn_service.py       # Amazon EventBridge bus & Step Functions state machine
+│   │   │   ├── sqs_ssm_service.py          # Amazon SQS FIFO queue & SSM Parameter Store
+│   │   │   └── provisioner.py              # Automated 1-click AWS Free Tier resource provisioner
+│   │   ├── mcp/                            # Formal Model Context Protocol (MCP) Server
+│   │   │   └── aegis_mcp_server.py         # 29 tools (16 AWS Free Tier tools), stdio & REST
+│   │   ├── ml/                             # Deep Learning Models
+│   │   │   ├── segformer_inference.py      # Dual-encoder SAR+Optical segmentation
+│   │   │   ├── postprocess.py              # Water depth contours & DEM fetcher
+│   │   │   └── urnn_nowcaster.py           # 4D ConvGRU spatiotemporal depth nowcasting
+│   │   └── RAG/                            # Retrieval-Augmented Generation
+│   │       ├── generator.py                # Bedrock & Gemini fallback report generators
+│   │       └── retriever.py                # Local vector store & document index
+│   ├── main.py                             # Backend entrypoint (FastAPI, port 8000)
+│   ├── test_aws_mcp_free_tier.py           # Automated E2E AWS Free Tier MCP test suite
+│   ├── requirements.txt                    # Python dependencies
+│   └── .env.example                        # Backend environment variable template
+│
+├── dell-flood-app/                         # Cross-Platform React Native (Expo) App
+│   ├── src/
+│   │   ├── components/                     # Tactical UI Components
+│   │   │   ├── NowcastPanel.tsx            # 4D Nowcasting player, depth contours & AWS diagnostics
+│   │   │   ├── ReportForm.tsx              # Citizen ground issue reporting & Rekognition badge
+│   │   │   ├── SatelliteDetectionView.tsx  # Dual-encoder satellite radar inspection
+│   │   │   ├── EvacuationRoutesView.tsx    # Interactive evacuation corridors & Location Svc
+│   │   │   ├── AgentPanel.tsx              # Bedrock SITREP viewer & Polly voice player
+│   │   │   ├── MapView.tsx                 # Leaflet / Google Maps Satellite tactical viewer
+│   │   │   └── SettingsModal.tsx           # Bilingual toggle & API endpoint config
+│   │   ├── services/
+│   │   │   └── api.ts                      # Backend REST client, AWS methods & offline sync
+│   │   ├── types/                          # TypeScript schemas
+│   │   └── utils/
+│   │       └── i18n.ts                     # Bilingual (English & Hindi) dictionary
+│   ├── App.tsx                             # Application root & dashboard layout
+│   ├── package.json                        # Node dependencies & Expo scripts
+│   └── app.json                            # Expo app configuration
+│
+├── .mcp.json                               # MCP client configuration for JSON-RPC 2.0 stdio
+├── AWS_INTEGRATION_PLAN.md                 # Complete AWS Free Tier integration matrix
+└── README.md                               # Master project documentation
+```
 
 ---
 
