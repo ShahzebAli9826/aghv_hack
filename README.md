@@ -13,6 +13,7 @@
 
 <b>Aegis is an autonomous disaster response platform bridging large language models, satellite Earth observation, and spatiotemporal deep learning with real-time physical world infrastructure data. Powered by Google Gemini 2.5 Flash, the MirEye Earth API, and a dual-encoder SegFormer MiT-B2 architecture, Aegis handles open-ended disaster tasks while dynamically routing location-sensitive queries to verified spatial, hydrological, and environmental hazard tools.
 
+
 Emergency managers, field responders, and residents often lack instant verified physical-world context during extreme weather events, forcing them to manually consult disjointed federal GIS portals. By fusing dual-encoder satellite Earth observation (SAR + Optical) with sub-meter physical intelligence, continuous Topographic Wetness Index (TWI) hydrology, 4D ConvGRU depth nowcasting, and an in-flight human-in-the-loop decision engine, Aegis identifies imminent flash flood zones, dynamically routes evacuees away from submersed corridors, and empowers incident commanders in real time.</b>
 
 ---

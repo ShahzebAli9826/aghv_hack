@@ -205,7 +205,29 @@ VERIFIED PIPELINE TELEMETRY (USE ONLY THESE EXACT NUMBERS — DO NOT INVENT ANY 
             except Exception as e:
                 print(f"[RAG Generator] Anthropic error: {e}")
 
-        # 5. Deterministic Grounded Fallback
+        # 5. Amazon Bedrock Runtime (Claude 3 Haiku / Nova Micro)
+        if not raw_report:
+            try:
+                from app.aws import bedrock_service
+                if bedrock_service.enabled:
+                    b_res = bedrock_service.invoke_sitrep_model(
+                        prompt=prompt,
+                        location=location,
+                        severity=severity,
+                        area_sq_km=area_sq_km,
+                        max_depth_m=max_depth_m,
+                        population_affected=population_affected,
+                        buildings_damaged=buildings_damaged,
+                        facilities_at_risk=facilities_at_risk,
+                        report_format=fmt_key,
+                        language=language,
+                    )
+                    if b_res.get("report_text"):
+                        raw_report = b_res["report_text"]
+            except Exception as e:
+                print(f"[RAG Generator] AWS Bedrock error: {e}")
+
+        # 6. Deterministic Grounded Fallback
         if not raw_report:
             raw_report = f"""============================================================
 [{fmt_key}] FLOOD SITUATION REPORT: {location.upper()}
@@ -229,3 +251,4 @@ ALERT SEVERITY: {severity} | CLASSIFICATION: {classification}
 
         validated = self.validate_and_ground_numbers(raw_report, verified_stats)
         return validated["report_text"]
+

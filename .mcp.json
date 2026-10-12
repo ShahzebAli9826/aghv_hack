@@ -1,0 +1,47 @@
+{
+  "mcpServers": {
+    "aegis-aws-flood-mcp": {
+      "command": "python",
+      "args": ["-m", "app.mcp.aegis_mcp_server"],
+      "cwd": "e:/hackthon/awswemakedev/dell-flood-backend",
+      "env": {
+        "PYTHONPATH": "e:/hackthon/awswemakedev/dell-flood-backend",
+        "AWS_DEFAULT_REGION": "ap-south-1",
+        "AWS_S3_BUCKET": "aegis-disaster-vault",
+        "AWS_DYNAMODB_REPORTS_TABLE": "Aegis-Citizen-Reports",
+        "AWS_DYNAMODB_SHELTERS_TABLE": "Aegis-Emergency-Shelters"
+      }
+    },
+    "awslabs.core-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.core-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "ap-south-1"
+      }
+    },
+    "awslabs.aws-documentation-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "awslabs.dynamodb-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.dynamodb-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "ap-south-1"
+      }
+    },
+    "awslabs.aws-location-mcp-server": {
+      "command": "uvx",
+      "args": ["awslabs.aws-location-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "ap-south-1"
+      }
+    }
+  }
+}
