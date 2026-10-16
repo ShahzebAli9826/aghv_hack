@@ -7,6 +7,9 @@ export const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/
   default: 'http://192.168.1.7:8000/api'
 });
 
+// Test number for the demo voice-call buttons. Empty by default, so those buttons place no call.
+export const DEMO_CALL_RECIPIENT = process.env.EXPO_PUBLIC_DEMO_CALL_RECIPIENT?.trim() ?? '';
+
 export interface ImpactStats {
   population: number;
   buildings: number;
@@ -63,23 +66,23 @@ export interface ShelterInfo {
 }
 
 let mockReports: CrowdReport[] = [
-  { id: 1, username: 'anil_bihar', lat: 25.6120, lon: 85.1320, location_name: 'Ganga Ghat Road, Patna, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Ganga river overflowing at Ghat road.', timestamp: Date.now() / 1000 - 1800, status: 'pending', model_confirmed: 1, score: 96.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 2, username: 'citizens_patna', lat: 25.6135, lon: 85.1380, location_name: 'Main Market Square, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Heavy waterlogging near market square.', timestamp: Date.now() / 1000 - 3600, status: 'pending', model_confirmed: 1, score: 85.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 3, username: 'ngo_rescue', lat: 26.1212, lon: 85.3640, location_name: 'Health Center, Muzaffarpur, Bihar', severity: 'SEVERE', description: '[Categories: Rescue Needed] Critical waterlogging at health center.', timestamp: Date.now() / 1000 - 7200, status: 'resolved', model_confirmed: 1, score: 94.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 4, username: 'saif', lat: 25.6124, lon: 85.1376, location_name: 'Patna Main Market Square, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Inundation detected along main commercial axis.', timestamp: Date.now() / 1000 - 9000, status: 'pending', model_confirmed: 1, score: 95.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 5, username: 'saif', lat: 25.6140, lon: 85.1410, location_name: 'Rajendra Nagar Terminus, Patna', severity: 'HIGH', description: '[Categories: Infrastructure Risk] Railway underpass submerged under 3ft water.', timestamp: Date.now() / 1000 - 10800, status: 'pending', model_confirmed: 1, score: 88.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 6, username: 'saif', lat: 25.6080, lon: 85.1290, location_name: 'Kankarbagh Colony, Patna', severity: 'MODERATE', description: '[Categories: Drainage Failure] Storm water drains overflowing into residential lanes.', timestamp: Date.now() / 1000 - 14400, status: 'pending', model_confirmed: 1, score: 82.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 7, username: 'Komal', lat: 28.7497, lon: 77.1145, location_name: 'Hari Nagar Block B, West Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Street drainage choked after continuous cloudburst.', timestamp: Date.now() / 1000 - 18000, status: 'pending', model_confirmed: 1, score: 79.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 8, username: 'Komal', lat: 28.6334, lon: 77.1111, location_name: 'Hari Nagar Market Area, Delhi', severity: 'SEVERE', description: '[Categories: Rescue Needed] Basement shops submerged, urgent power cutoff requested.', timestamp: Date.now() / 1000 - 21600, status: 'pending', model_confirmed: 1, score: 93.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 9, username: 'citizen_test', lat: 28.6139, lon: 77.2090, location_name: 'Connaught Place Outer Circle, New Delhi', severity: 'MODERATE', description: '[Categories: Traffic Stalled] Road traffic stalled due to localized flash inundation.', timestamp: Date.now() / 1000 - 25200, status: 'pending', model_confirmed: 1, score: 76.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 10, username: 'Komal', lat: 28.5487, lon: 77.1207, location_name: 'Aerocity Access Road, Delhi', severity: 'MINOR', description: '[Categories: Water Logging] Shallow water accumulation along curbside.', timestamp: Date.now() / 1000 - 28800, status: 'pending', model_confirmed: 0, score: 58.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 11, username: 'assam_sdrf', lat: 26.9500, lon: 94.2167, location_name: 'Kamalabari Ghat, Majuli, Assam', severity: 'CRITICAL', description: '[Categories: Embankment Breach] Brahmaputra flood wave breached ring bund.', timestamp: Date.now() / 1000 - 32400, status: 'pending', model_confirmed: 1, score: 98.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 12, username: 'assam_sdrf', lat: 26.6500, lon: 93.3500, location_name: 'Kaziranga National Park Range, Assam', severity: 'CRITICAL', description: '[Categories: Wildlife & Rural] Highway NH-715 submerged, animal corridor flooded.', timestamp: Date.now() / 1000 - 36000, status: 'pending', model_confirmed: 1, score: 97.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 13, username: 'ngo_rescue', lat: 26.1520, lon: 85.8950, location_name: 'Darbhanga University Environs, Bihar', severity: 'HIGH', description: '[Categories: Relief Camp] Relief camp approach road inundated.', timestamp: Date.now() / 1000 - 39600, status: 'pending', model_confirmed: 1, score: 87.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 14, username: 'citizen_bihar', lat: 25.5941, lon: 85.1376, location_name: 'Boring Road Crossing, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Roadway waterlogged up to vehicle tyres.', timestamp: Date.now() / 1000 - 43200, status: 'pending', model_confirmed: 1, score: 75.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 15, username: 'saif_official', lat: 25.6124, lon: 85.1376, location_name: 'Patna Collectorate Area, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] NDRF pump de-watering completed at primary sector.', timestamp: Date.now() / 1000 - 46800, status: 'resolved', model_confirmed: 1, score: 92.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 16, username: 'official_bihar', lat: 26.1220, lon: 85.3620, location_name: 'Muzaffarpur Collectorate Campus, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] Sump pump operating at normal levels.', timestamp: Date.now() / 1000 - 50400, status: 'resolved', model_confirmed: 1, score: 91.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 17, username: 'sdrf_unit4', lat: 28.7501, lon: 77.1147, location_name: 'West Delhi Outer Drain Channel, Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Water clearance operations ongoing.', timestamp: Date.now() / 1000 - 54000, status: 'pending', model_confirmed: 1, score: 80.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" }
+  { id: 1, username: 'anil_bihar', lat: 25.6120, lon: 85.1320, location_name: 'Ganga Ghat Road, Patna, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Ganga river overflowing at Ghat road.', timestamp: Date.now() / 1000 - 1800, status: 'pending', model_confirmed: 1, score: 96.0, email: "rawalrajat044@gmail.com" },
+  { id: 2, username: 'citizens_patna', lat: 25.6135, lon: 85.1380, location_name: 'Main Market Square, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Heavy waterlogging near market square.', timestamp: Date.now() / 1000 - 3600, status: 'pending', model_confirmed: 1, score: 85.0, email: "rawalrajat044@gmail.com" },
+  { id: 3, username: 'ngo_rescue', lat: 26.1212, lon: 85.3640, location_name: 'Health Center, Muzaffarpur, Bihar', severity: 'SEVERE', description: '[Categories: Rescue Needed] Critical waterlogging at health center.', timestamp: Date.now() / 1000 - 7200, status: 'resolved', model_confirmed: 1, score: 94.0, email: "rawalrajat044@gmail.com" },
+  { id: 4, username: 'saif', lat: 25.6124, lon: 85.1376, location_name: 'Patna Main Market Square, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Inundation detected along main commercial axis.', timestamp: Date.now() / 1000 - 9000, status: 'pending', model_confirmed: 1, score: 95.0, email: "rawalrajat044@gmail.com" },
+  { id: 5, username: 'saif', lat: 25.6140, lon: 85.1410, location_name: 'Rajendra Nagar Terminus, Patna', severity: 'HIGH', description: '[Categories: Infrastructure Risk] Railway underpass submerged under 3ft water.', timestamp: Date.now() / 1000 - 10800, status: 'pending', model_confirmed: 1, score: 88.0, email: "rawalrajat044@gmail.com" },
+  { id: 6, username: 'saif', lat: 25.6080, lon: 85.1290, location_name: 'Kankarbagh Colony, Patna', severity: 'MODERATE', description: '[Categories: Drainage Failure] Storm water drains overflowing into residential lanes.', timestamp: Date.now() / 1000 - 14400, status: 'pending', model_confirmed: 1, score: 82.0, email: "rawalrajat044@gmail.com" },
+  { id: 7, username: 'Komal', lat: 28.7497, lon: 77.1145, location_name: 'Hari Nagar Block B, West Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Street drainage choked after continuous cloudburst.', timestamp: Date.now() / 1000 - 18000, status: 'pending', model_confirmed: 1, score: 79.0, email: "rawalrajat044@gmail.com" },
+  { id: 8, username: 'Komal', lat: 28.6334, lon: 77.1111, location_name: 'Hari Nagar Market Area, Delhi', severity: 'SEVERE', description: '[Categories: Rescue Needed] Basement shops submerged, urgent power cutoff requested.', timestamp: Date.now() / 1000 - 21600, status: 'pending', model_confirmed: 1, score: 93.0, email: "rawalrajat044@gmail.com" },
+  { id: 9, username: 'citizen_test', lat: 28.6139, lon: 77.2090, location_name: 'Connaught Place Outer Circle, New Delhi', severity: 'MODERATE', description: '[Categories: Traffic Stalled] Road traffic stalled due to localized flash inundation.', timestamp: Date.now() / 1000 - 25200, status: 'pending', model_confirmed: 1, score: 76.0, email: "rawalrajat044@gmail.com" },
+  { id: 10, username: 'Komal', lat: 28.5487, lon: 77.1207, location_name: 'Aerocity Access Road, Delhi', severity: 'MINOR', description: '[Categories: Water Logging] Shallow water accumulation along curbside.', timestamp: Date.now() / 1000 - 28800, status: 'pending', model_confirmed: 0, score: 58.0, email: "rawalrajat044@gmail.com" },
+  { id: 11, username: 'assam_sdrf', lat: 26.9500, lon: 94.2167, location_name: 'Kamalabari Ghat, Majuli, Assam', severity: 'CRITICAL', description: '[Categories: Embankment Breach] Brahmaputra flood wave breached ring bund.', timestamp: Date.now() / 1000 - 32400, status: 'pending', model_confirmed: 1, score: 98.0, email: "rawalrajat044@gmail.com" },
+  { id: 12, username: 'assam_sdrf', lat: 26.6500, lon: 93.3500, location_name: 'Kaziranga National Park Range, Assam', severity: 'CRITICAL', description: '[Categories: Wildlife & Rural] Highway NH-715 submerged, animal corridor flooded.', timestamp: Date.now() / 1000 - 36000, status: 'pending', model_confirmed: 1, score: 97.0, email: "rawalrajat044@gmail.com" },
+  { id: 13, username: 'ngo_rescue', lat: 26.1520, lon: 85.8950, location_name: 'Darbhanga University Environs, Bihar', severity: 'HIGH', description: '[Categories: Relief Camp] Relief camp approach road inundated.', timestamp: Date.now() / 1000 - 39600, status: 'pending', model_confirmed: 1, score: 87.0, email: "rawalrajat044@gmail.com" },
+  { id: 14, username: 'citizen_bihar', lat: 25.5941, lon: 85.1376, location_name: 'Boring Road Crossing, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Roadway waterlogged up to vehicle tyres.', timestamp: Date.now() / 1000 - 43200, status: 'pending', model_confirmed: 1, score: 75.0, email: "rawalrajat044@gmail.com" },
+  { id: 15, username: 'saif_official', lat: 25.6124, lon: 85.1376, location_name: 'Patna Collectorate Area, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] NDRF pump de-watering completed at primary sector.', timestamp: Date.now() / 1000 - 46800, status: 'resolved', model_confirmed: 1, score: 92.0, email: "rawalrajat044@gmail.com" },
+  { id: 16, username: 'official_bihar', lat: 26.1220, lon: 85.3620, location_name: 'Muzaffarpur Collectorate Campus, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] Sump pump operating at normal levels.', timestamp: Date.now() / 1000 - 50400, status: 'resolved', model_confirmed: 1, score: 91.0, email: "rawalrajat044@gmail.com" },
+  { id: 17, username: 'sdrf_unit4', lat: 28.7501, lon: 77.1147, location_name: 'West Delhi Outer Drain Channel, Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Water clearance operations ongoing.', timestamp: Date.now() / 1000 - 54000, status: 'pending', model_confirmed: 1, score: 80.0, email: "rawalrajat044@gmail.com" }
 ];
 
 let mockShelters: ShelterInfo[] = [
@@ -92,10 +95,10 @@ let mockAgentLogs: string[] = [];
 
 // Static mock user storage supporting strict password verification (only used if useMock is explicitly true)
 const localMockUsers: Record<string, { role: string; phone: string; password: string }> = {
-  "saif": { role: "official", phone: "+917678656930", password: "123" },
-  "shah": { role: "citizen", phone: "+917678656930", password: "123" },
-  "saif_official": { role: "official", phone: "+917678656930", password: "123" },
-  "admin": { role: "official", phone: "+917678656930", password: "123" }
+  "saif": { role: "official", phone: "", password: "123" },
+  "shah": { role: "citizen", phone: "", password: "123" },
+  "saif_official": { role: "official", phone: "", password: "123" },
+  "admin": { role: "official", phone: "", password: "123" }
 };
 
 export const apiService = {
@@ -317,7 +320,6 @@ export const apiService = {
       status: 'pending',
       model_confirmed: confirmed,
       score: calcScore,
-      phone: "+917678656930",
       email: "rawalrajat044@gmail.com"
     };
 
@@ -507,38 +509,33 @@ export const apiService = {
     return { status: "SUCCESS" };
   },
 
-  // 7. Twilio Multilingual Voice Call Trigger (Defaults to +917678656930 — P34)
+  // 7. Twilio Multilingual Voice Call Trigger (P34). An empty recipient places no call.
   async triggerVoiceCall(
-    phoneNumber: string = "+917678656930",
+    phoneNumber: string,
     message: string = "",
     options?: { location?: string; severity?: string; language?: "en" | "hi"; max_depth_m?: number }
   ): Promise<any> {
-    const targetPhone = phoneNumber && phoneNumber.trim() ? phoneNumber.trim() : "+917678656930";
-    try {
-      const res = await fetch(`${this.apiUrl}/alerts/voice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone_number: targetPhone,
-          message,
-          location: options?.location || "Patna District",
-          severity: options?.severity || "CRITICAL",
-          language: options?.language || "hi",
-          max_depth_m: options?.max_depth_m ?? 0.68,
-        })
-      });
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.log("[Twilio API] Backend voice trigger unreachable. Falling back to mock console output.");
+    const targetPhone = phoneNumber.trim();
+    if (!targetPhone) {
+      throw new Error('No recipient phone number is configured (EXPO_PUBLIC_DEMO_CALL_RECIPIENT); no call was placed.');
     }
-
-    return {
-      status: "SUCCESS",
-      target_phone: targetPhone,
-      language: options?.language || "hi",
-      script_spoken: message || "आपतकालीन बाढ़ चेतावनी! कृपया तुरंत ऊंचे सुरक्षित आश्रय स्थल की ओर प्रस्थान करें।",
-      message: `Voice alert dispatched to ${targetPhone}.`
-    };
+    const res = await fetch(`${this.apiUrl}/alerts/voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone_number: targetPhone,
+        message,
+        location: options?.location || "Patna District",
+        severity: options?.severity || "CRITICAL",
+        language: options?.language || "hi",
+        max_depth_m: options?.max_depth_m ?? 0.68,
+      })
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.detail || `Voice call failed (HTTP ${res.status}).`);
+    }
+    return result;
   },
 
   // 8. SMTP alert trigger
@@ -602,7 +599,7 @@ export const apiService = {
           location,
           lat,
           lon,
-          phones: options?.phones || ["+917678656930"],
+          phones: options?.phones ?? [],
           report_format: options?.report_format || "DM_EXECUTIVE",
           language: options?.language || "en",
           require_hitl_for_calls: options?.require_hitl_for_calls ?? false,
@@ -627,7 +624,7 @@ export const apiService = {
         `[${nowStr}] [HydrologySentinel] Querying CWC river gauge: Danger Level +0.42m, discharge 18,400 m³/s`,
         `[${nowStr}] [SatelliteVisionAgent] SegFormer MiT-B2 SAR+Optical Inundation Extent: 2.34 km² (Confidence 91.2%)`,
         `[${nowStr}] [GISImpactRouterAgent] OSM Spatial Join: 1,840 population affected, 412 buildings exposed, safe evacuation ETA: 16 min`,
-        `[${nowStr}] [AlertDispatcherAgent] OASIS CAP v1.2 Alert generated & bilingual voice alert drafted for +917678656930`,
+        `[${nowStr}] [AlertDispatcherAgent] OASIS CAP v1.2 Alert generated & bilingual voice alert drafted`,
         `[${nowStr}] [RAGReportCompilerAgent] SOP Situation Report compiled with verified numeric grounding`,
         `[${nowStr}] [AWS S3] SITREP PDF vaulted to s3://aegis-disaster-vault/reports/ (Presigned URL Ready)`,
         `[${nowStr}] [AWS Polly] Neural Bilingual Voice synthesized (Aditi hi-IN / Raveena en-IN)`,
@@ -1438,16 +1435,17 @@ export const apiService = {
     return [];
   },
 
-  async approveHitlItem(itemId: number | string, language: 'en' | 'hi' = 'hi'): Promise<any> {
-    try {
-      const res = await fetch(`${this.apiUrl}/hitl/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id: itemId, language }),
-      });
-      if (res.ok) return await res.json();
-    } catch (e) {}
-    return { status: 'SUCCESS', target_phone: '+917678656930' };
+  async approveHitlItem(itemId: string, language: 'en' | 'hi' = 'hi'): Promise<any> {
+    const res = await fetch(`${this.apiUrl}/hitl/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId, language }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.detail || `HITL approval failed (HTTP ${res.status}).`);
+    }
+    return result;
   },
 
   async getMcpAuditLog(limit: number = 20): Promise<any[]> {

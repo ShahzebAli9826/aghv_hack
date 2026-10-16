@@ -189,7 +189,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "dispatch_approved_alert",
-        "description": "Dispatches HITL-approved emergency voice call to +917678656930 in Hindi or English via Twilio.",
+        "description": "Dispatches a HITL-approved emergency voice call to the draft's recipient in Hindi or English via Twilio.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -507,7 +507,6 @@ def build_cap_v12_payload(
         "headline_en": f"Emergency Flood Alert: {location}",
         "script_hi": speech_hi,
         "script_en": speech_en,
-        "target_demo_phone": "+917678656930",
         "xml": cap_xml,
     }
 
@@ -639,7 +638,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
 
     elif tool_name == "dispatch_approved_alert":
         data = trigger_voice_call(
-            phone_number=str(arguments.get("phone_number", "+917678656930")),
+            phone_number=arguments.get("phone_number"),
             location=location,
             severity=str(arguments.get("severity", "CRITICAL")),
             language=str(arguments.get("language", "hi")),

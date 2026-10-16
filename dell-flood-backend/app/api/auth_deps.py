@@ -173,20 +173,15 @@ def slugify_location(location: str) -> str:
     return cleaned[:48] or "flood_report"
 
 
-def normalize_and_validate_phone(phone: Optional[str], default_demo: str = "+917678656930") -> str:
-    """
-    Validates E.164 phone format and defaults to the user's demonstration phone
-    +917678656930 (7678656930) when empty or during demo mode (Solves P2 & P34).
-    """
+def normalize_and_validate_phone(phone: Optional[str]) -> Optional[str]:
+    """Returns the E.164 form of phone (bare 10-digit numbers get +91), or None when it is empty or invalid."""
     if not phone or not str(phone).strip():
-        return default_demo
+        return None
     raw = re.sub(r"[\s\-\(\)]", "", str(phone).strip())
-    if raw == "7678656930" or raw.endswith("7678656930"):
-        return "+917678656930"
     if len(raw) == 10 and raw.isdigit():
         raw = f"+91{raw}"
     if not re.match(r"^\+[1-9]\d{7,14}$", raw):
-        return default_demo
+        return None
     return raw
 
 

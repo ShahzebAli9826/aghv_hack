@@ -8,10 +8,12 @@ from typing import Dict, Any, List, Optional, TypedDict
 
 from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
 from app.RAG.generator import SituationReportGenerator
+from app.api.auth_deps import normalize_and_validate_phone
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
 HITL_PENDING = "PENDING_OFFICIAL_APPROVAL"
 HITL_APPROVED = "APPROVED_AND_DISPATCHED"
+HITL_APPROVED_NO_RECIPIENT = "APPROVED_NO_RECIPIENT"
 
 
 class HitlDraftNotFound(LookupError):
@@ -104,6 +106,7 @@ class MultiAgentIncidentOrchestrator:
         lon: float,
         language: str = "hi",
         report_format: str = "NDMA",
+        target_phone: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_id = f"inc_{uuid.uuid4().hex[:8]}"
         logs: List[str] = []
@@ -234,10 +237,12 @@ class MultiAgentIncidentOrchestrator:
             max_depth_m=peak_depth_60m,
             language=language,
             cap_payload=cap_payload,
+            target_phone=target_phone,
         )
         nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
         logs.append(
-            f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script for +917678656930. "
+            f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script for "
+            f"{target_phone or 'no recipient (approval will not place a call)'}. "
             f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
         )
 
@@ -278,6 +283,7 @@ class MultiAgentIncidentOrchestrator:
         max_depth_m: float,
         language: str,
         cap_payload: Dict[str, Any],
+        target_phone: Optional[str],
     ):
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -300,7 +306,7 @@ class MultiAgentIncidentOrchestrator:
                     escalation_tier,
                     area_sq_km,
                     max_depth_m,
-                    "+917678656930",
+                    target_phone,
                     language,
                     cap_payload["script_hi"],
                     cap_payload["script_en"],
@@ -342,10 +348,12 @@ class MultiAgentIncidentOrchestrator:
             row = cur.fetchone()
             if row is None:
                 raise HitlDraftNotFound(draft_id)
+            target_phone = normalize_and_validate_phone(row["target_phone"])
+            new_status = HITL_APPROVED if target_phone else HITL_APPROVED_NO_RECIPIENT
             approved_at = time.time()
             cur.execute(
                 "UPDATE hitl_approvals SET status = ?, approved_by = ?, approved_at = ? WHERE draft_id = ? AND status = ?",
-                (HITL_APPROVED, approved_by, approved_at, draft_id, HITL_PENDING),
+                (new_status, approved_by, approved_at, draft_id, HITL_PENDING),
             )
             if cur.rowcount != 1:
                 raise HitlDraftNotPending(draft_id, row["status"])
@@ -353,22 +361,26 @@ class MultiAgentIncidentOrchestrator:
         finally:
             conn.close()
 
-        draft = {**dict(row), "status": HITL_APPROVED, "approved_by": approved_by, "approved_at": approved_at}
-        res = execute_mcp_tool(
-            "dispatch_approved_alert",
-            {
-                "phone_number": draft["target_phone"],
-                "location": draft["location"],
-                "severity": draft["severity"],
-                "language": language or draft["language"],
-                "max_depth_m": draft["max_depth_m"],
-            },
-        )
+        draft = {**dict(row), "status": new_status, "approved_by": approved_by, "approved_at": approved_at}
+        if target_phone is None:
+            print(f"[HITL] Draft {draft_id} approved by {approved_by} has no valid recipient; no call placed.")
+            receipt = {"status": "NO_RECIPIENT", "detail": "Draft has no valid recipient phone number; no call was placed."}
+        else:
+            receipt = execute_mcp_tool(
+                "dispatch_approved_alert",
+                {
+                    "phone_number": target_phone,
+                    "location": draft["location"],
+                    "severity": draft["severity"],
+                    "language": language or draft["language"],
+                    "max_depth_m": draft["max_depth_m"],
+                },
+            )["data"]
         return {
             "draft_id": draft_id,
-            "status": HITL_APPROVED,
+            "status": new_status,
             "approved_by": approved_by,
-            "dispatch_receipt": res["data"],
+            "dispatch_receipt": receipt,
             "draft": draft,
         }
 

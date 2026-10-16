@@ -39,7 +39,6 @@ from app.agent.tools import (
     check_rainfall,
     check_gauge,
     trigger_voice_call as agent_trigger_voice_call,
-    DEFAULT_DEMO_CALL_NUMBER,
 )
 from app.RAG.generator import SituationReportGenerator
 from app.api.auth_deps import (
@@ -113,9 +112,9 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO users (username, password_hash, role, phone) VALUES (?, ?, ?, ?)", [
-            ("saif", hash_password_salted("123"), "official", DEFAULT_DEMO_CALL_NUMBER),
-            ("shah", hash_password_salted("123"), "citizen", DEFAULT_DEMO_CALL_NUMBER),
-            ("saif_official", hash_password_salted("123"), "official", DEFAULT_DEMO_CALL_NUMBER)
+            ("saif", hash_password_salted("123"), "official", None),
+            ("shah", hash_password_salted("123"), "citizen", None),
+            ("saif_official", hash_password_salted("123"), "official", None)
         ])
     conn.commit()
     conn.close()
@@ -153,7 +152,7 @@ class DetectionRequest(BaseModel):
     cloud_cover: float = 12.0
 
 class VoiceCallRequest(BaseModel):
-    phone_number: Optional[str] = DEFAULT_DEMO_CALL_NUMBER
+    phone_number: Optional[str] = None
     message: Optional[str] = ""
     location: Optional[str] = "Patna District"
     severity: Optional[str] = "CRITICAL"
@@ -322,15 +321,18 @@ def login_user(payload: LoginRequest):
         "aws_cognito": cognito_bundle,
     }
 
-# --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint (Defaults to +917678656930) ---
+# --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint ---
 @router.post("/alerts/voice", dependencies=[Depends(require_official)])
 def trigger_voice_call(payload: VoiceCallRequest):
+    target_phone = normalize_and_validate_phone(payload.phone_number)
+    if target_phone is None:
+        raise HTTPException(status_code=400, detail="phone_number is missing or not a valid E.164 number; no call was placed.")
     loc = payload.location or "Patna District"
     sev = payload.severity or "CRITICAL"
     lang = payload.language or "hi"
     depth = payload.max_depth_m if payload.max_depth_m is not None else 0.68
     res = agent_trigger_voice_call(
-        phone_number=payload.phone_number or DEFAULT_DEMO_CALL_NUMBER,
+        phone_number=target_phone,
         message=payload.message or "",
         location=loc,
         severity=sev,
@@ -1757,7 +1759,6 @@ def report_flood(payload: CrowdReportRequest, background_tasks: BackgroundTasks 
                 location=loc_label,
                 lat=payload.lat,
                 lon=payload.lon,
-                phones=[DEFAULT_DEMO_CALL_NUMBER],
                 require_hitl_for_calls=True,
             )
 
@@ -1922,7 +1923,7 @@ def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(r
         location=payload.location,
         lat=lat,
         lon=lon,
-        phones=payload.phones or [DEFAULT_DEMO_CALL_NUMBER],
+        phones=payload.phones,
         report_format=payload.report_format or "DM_EXECUTIVE",
         language=payload.language or "en",
         require_hitl_for_calls=payload.require_hitl_for_calls,

@@ -2,8 +2,10 @@ import os
 import io
 import math
 import html
+import uuid
 import requests
 import numpy as np
+from typing import Optional
 from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -18,12 +20,12 @@ except ImportError:
     TwilioClient = None
     VoiceResponse = None
 
-DEFAULT_DEMO_CALL_NUMBER = "+917678656930"
-
-
-def send_sms_alert(phone_number: str = "+917678656930", message: str = "") -> bool:
-    """Dispatches an E.164-validated SMS alert defaulting to +917678656930 (Solves P2 & P34)."""
-    target_phone = normalize_and_validate_phone(phone_number, default_demo="+917678656930")
+def send_sms_alert(phone_number: Optional[str], message: str = "") -> bool:
+    """Dispatches an E.164-validated SMS alert; an empty or invalid number sends nothing (Solves P2 & P34)."""
+    target_phone = normalize_and_validate_phone(phone_number)
+    if target_phone is None:
+        print(f"[Twilio Alert] No valid recipient ({phone_number!r}); SMS not sent.")
+        return False
 
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -147,7 +149,7 @@ def build_safe_twiml_say(speech_text: str, language: str = "hi") -> str:
 
 
 def trigger_voice_call(
-    phone_number: str = "+917678656930",
+    phone_number: Optional[str] = None,
     location: str = "Patna",
     severity: str = "CRITICAL",
     language: str = "hi",
@@ -158,11 +160,21 @@ def trigger_voice_call(
     **kwargs,
 ) -> dict:
     """
-    Triggers an outbound emergency voice call strictly defaulting to +917678656930 (7678656930)
-    with a dynamically generated Hindi ('hi') or English ('en') LLM warning script (Solves P2 & P34).
+    Triggers an outbound emergency voice call with a dynamically generated Hindi ('hi') or English ('en')
+    LLM warning script. An empty or invalid number places no call (Solves P2 & P34).
     """
-    target_phone = normalize_and_validate_phone(phone_number, default_demo="+917678656930")
+    target_phone = normalize_and_validate_phone(phone_number)
     lang_code = "hi" if str(language).lower().startswith("hi") else "en"
+    if target_phone is None:
+        print(f"[Twilio IVR] No valid recipient ({phone_number!r}); no call placed.")
+        return {
+            "status": "NO_RECIPIENT",
+            "mode": "not_dialed",
+            "call_sid": None,
+            "target": None,
+            "language": "hi-IN" if lang_code == "hi" else "en-IN",
+            "detail": "No valid recipient phone number; no call was placed.",
+        }
 
     speech_text = message or custom_message or generate_multilingual_voice_script(
         location=location,
@@ -249,7 +261,7 @@ def trigger_voice_call(
     return {
         "status": "SUCCESS",
         "mode": "simulated_gateway",
-        "call_sid": "SIM_CALL_7678656930",
+        "call_sid": f"SIM_CALL_{uuid.uuid4().hex[:10]}",
         "target": target_phone,
         "language": "hi-IN" if lang_code == "hi" else "en-IN",
         "voice": "Polly.Aditi" if lang_code == "hi" else "alice",

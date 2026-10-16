@@ -49,7 +49,8 @@ os.chdir(SANDBOX_DIR)
 import numpy as np
 from fastapi.testclient import TestClient
 import main
-from app.agent import incident_orchestrator
+from app.agent import incident_orchestrator, tools
+from app.api.auth_deps import normalize_and_validate_phone
 from app.api import endpoints
 from app.aws import sns_service
 from app.ml.inference import get_shared_model
@@ -214,6 +215,7 @@ def test_agent_cycle_drafts_without_broadcasting_and_approval_dispatches_once():
         assert approved.status_code == 200, approved.text
         body = approved.json()
         assert (body["status"], body["approved_by"], body["draft"]["location"]) == ("APPROVED_AND_DISPATCHED", "saif", "Phase0 Wet Ward")
+        assert (body["dispatch_receipt"]["mode"], body["dispatch_receipt"]["target"]) == ("simulated_gateway", "+15555550123")
         assert [(c["location"], c["severity_level"]) for c in sns.calls] == [("Phase0 Wet Ward", "CRITICAL")]
 
         again = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
@@ -273,6 +275,57 @@ def test_diagnostic_suite_never_publishes_to_sns():
         assert [p["Subject"] for p in fake.published] == ["AEGIS FLASH FLOOD ALERT: PHASE0 LIVE CHECK (CRITICAL)"]
     finally:
         sns_service.enabled, sns_service._sns, sns_service.topic_arn = saved
+
+
+def test_phone_normalization_has_no_fallback_recipient():
+    assert [normalize_and_validate_phone(p) for p in ("98765 43210", "+1 (555) 555-0123", "", None, "12", "call me")] == [
+        "+919876543210", "+15555550123", None, None, None, None,
+    ]
+
+
+def test_invalid_recipient_places_no_call():
+    assert tools.trigger_voice_call("12", location="Patna")["status"] == "NO_RECIPIENT"
+    assert tools.trigger_voice_call("+15555550123", location="Patna", message="test")["target"] == "+15555550123"
+    assert tools.send_sms_alert("", "test") is False
+
+    headers = _official_headers()
+    voice = client.post("/api/alerts/voice", json={"phone_number": "12"}, headers=headers)
+    assert voice.status_code == 400
+    assert voice.json()["detail"] == "phone_number is missing or not a valid E.164 number; no call was placed."
+
+    with _ModelProbability(0.95), _SnsRecorder():
+        draft_id = endpoints.agent.run_cycle(
+            location="Phase0 No Recipient Ward", lat=25.6124, lon=85.1376, phones=["not-a-phone"], language="en",
+        )["hitl_draft_id"]
+        assert _pending_draft_ids(headers)[draft_id]["target_phones"] == []
+        approved = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+    assert approved.status_code == 200, approved.text
+    assert (approved.json()["status"], approved.json()["dispatch_receipt"]["status"]) == ("APPROVED_NO_RECIPIENT", "NO_RECIPIENT")
+
+
+def _source_files_containing(top, needle):
+    skip_dirs = {"node_modules", "venv", ".venv", ".git", ".claude", "__pycache__", ".expo"}
+    found = []
+    for root, dirs, files in os.walk(top):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for name in files:
+            if name.endswith((".py", ".ts", ".tsx")):
+                path = os.path.join(root, name)
+                with open(path, encoding="utf-8", errors="ignore") as fh:
+                    if needle in fh.read():
+                        found.append(os.path.relpath(path, top).replace(os.sep, "/"))
+    return sorted(found)
+
+
+def test_hard_coded_recipient_is_gone_from_source():
+    needle = "+91" + "7678656930"
+    fixture_dir = os.path.join(SANDBOX_DIR, "scan_fixture")
+    os.makedirs(os.path.join(fixture_dir, "node_modules"), exist_ok=True)
+    for rel in ("planted.tsx", "node_modules/ignored.ts", "notes.md"):
+        with open(os.path.join(fixture_dir, rel), "w", encoding="utf-8") as fh:
+            fh.write(f'const phone = "{needle}";')
+    assert _source_files_containing(fixture_dir, needle) == ["planted.tsx"]
+    assert _source_files_containing(REPO_ROOT, needle) == []
 
 
 def test_cors_default_has_no_wildcard():

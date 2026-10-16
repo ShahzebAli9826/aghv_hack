@@ -19,7 +19,7 @@ from app.ml.urnn_nowcaster import get_shared_urnn
 from app.aegis.pipeline.impact_analyzer import calculate_live_impact
 from app.RAG.generator import SituationReportGenerator
 from app.agent.incident_orchestrator import get_incident_orchestrator
-from app.api.auth_deps import slugify_location
+from app.api.auth_deps import slugify_location, normalize_and_validate_phone
 from app.aws import s3_service, sns_service, polly_service, cloudwatch_service
 
 
@@ -71,7 +71,8 @@ class FloodAgent:
         """
         if not require_hitl_for_calls and not requested_by:
             raise ValueError("Skipping the HITL queue needs the requesting official as requested_by.")
-        target_phones = phones or phone_numbers or ["+917678656930"]
+        target_phones = phones or phone_numbers or []
+        draft_recipient = next((p for p in map(normalize_and_validate_phone, target_phones) if p), None)
         cycle_logs = []
         cycle_start_t = time.time()
 
@@ -89,6 +90,7 @@ class FloodAgent:
             lon=lon,
             language=language,
             report_format=report_format,
+            target_phone=draft_recipient,
         )
         for olog in orch_res.get("logs", []):
             rlog(olog)
@@ -233,9 +235,9 @@ class FloodAgent:
                 "item_id": item.get("draft_id"),
                 "draft_id": item.get("draft_id"),
                 "action_type": "CAP_ALERT_AND_VOICE_DISPATCH",
-                "location": item.get("location", "Patna, Bihar"),
-                "severity": item.get("severity", "CRITICAL"),
-                "target_phones": [cap.get("target_demo_phone", "+917678656930")],
+                "location": item.get("location"),
+                "severity": item.get("severity"),
+                "target_phones": [item["target_phone"]] if item.get("target_phone") else [],
                 "language": "hi",
                 "created_at": item.get("created_at"),
                 "status": "PENDING" if "PENDING" in st.upper() else st,
