@@ -776,6 +776,30 @@ def test_final_save_failure_still_releases_run():
     assert f"web-intel run {first.run_id} could not be saved" in records
 
 
+class FirstSaveFails(IntelStore):
+    failed = False
+
+    def save_run(self, run, request_key=None):
+        if not self.failed:
+            self.failed = True
+            raise sqlite3.OperationalError("database is locked")
+        super().save_run(run, request_key)
+
+
+def test_failed_start_leaves_no_ghost_run():
+    store = FirstSaveFails(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
+    service = build_service(make_settings(mode=Mode.replay, api_key=None), store=store,
+                            resolver=public_resolver, sleep=lambda s: None, today=lambda: date(2026, 10, 16))
+    request = RunRequest(location=SIWAN, products=(ProductId.river_levels,))
+    try:
+        service.runner.start(request)
+        raise AssertionError("expected the store failure to propagate")
+    except sqlite3.OperationalError as exc:
+        assert str(exc) == "database is locked"
+    retried = service.runner.start(request)
+    assert service.runner.wait(retried.run_id, 3).state is RunState.succeeded
+
+
 def test_restart_marks_inflight_runs_interrupted():
     store = IntelStore(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
     now = datetime.now(timezone.utc)

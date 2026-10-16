@@ -626,9 +626,19 @@ class IntelRunner:
             handle = _Handle(run=base, request=request)
             self._active[base.run_id] = handle
             self._inflight[request.key] = base.run_id
-        self.store.save_run(base, request.key)
-        self._run_pool.submit(self._execute, handle)
+        try:
+            self.store.save_run(base, request.key)
+            self._run_pool.submit(self._execute, handle)
+        except BaseException:
+            self._release(handle)
+            raise
         return base
+
+    def _release(self, handle: _Handle) -> None:
+        with self._lock:
+            self._active.pop(handle.run.run_id, None)
+            if self._inflight.get(handle.request.key) == handle.run.run_id:
+                del self._inflight[handle.request.key]
 
     def snapshot(self, handle: _Handle) -> WebIntelRun:
         with handle.lock:
@@ -707,10 +717,7 @@ class IntelRunner:
             try:
                 self._save_final(handle)
             finally:
-                with self._lock:
-                    self._active.pop(handle.run.run_id, None)
-                    if self._inflight.get(request.key) == handle.run.run_id:
-                        del self._inflight[request.key]
+                self._release(handle)
                 handle.done.set()
 
     def _save_final(self, handle: _Handle) -> None:
