@@ -775,6 +775,35 @@ def test_webhook_token_dedupe_and_refetch():
     service.runner.wait(changed["run_id"], 10)
 
 
+def test_webhook_rejects_ids_that_are_not_plain_tokens():
+    fake = FakeHTTP()
+    client = api(make_service(tinyfish=fake))
+    hook = f"/api/agent/web-intelligence/webhook?token={WEBHOOK_TOKEN}"
+    for event in ({"event": "run.completed", "run_id": "../monitors"},
+                  {"event": "run.completed", "run_id": "run_9/cancel"},
+                  {"event": "run.completed", "run_id": "r" * 65},
+                  {"fetch_monitor_id": "mon_1/../x", "id": "mrun_1"},
+                  {"fetch_monitor_id": "mon_1", "id": "mrun 1"}):
+        assert client.post(hook, json=event).json() == {"status": "ignored", "reason": "invalid id"}, event
+    assert fake.requests == []
+    assert client.post(hook, json={"fetch_monitor_id": "mon_1", "id": "mrun_1"}).json() == {
+        "status": "ignored", "reason": "unknown monitor"}
+
+
+def test_client_quotes_ids_in_paths():
+    fake = FakeHTTP()
+    client = TinyFishClient(make_settings(), fake.client())
+    for call in (client.get_run, client.cancel_run, client.get_research, client.get_monitor, client.delete_monitor,
+                 client.trigger_monitor):
+        try:
+            call("a/../b")
+        except Exception:  # noqa: BLE001 - the fake answers 404; only the URL matters here
+            pass
+    assert [httpx.URL(r["url"]).raw_path.decode().split("?")[0] for r in fake.requests] == [
+        "/v1/runs/a%2F..%2Fb", "/v1/runs/a%2F..%2Fb/cancel", "/v1/research-run/a%2F..%2Fb",
+        "/v1/monitors/a%2F..%2Fb", "/v1/monitors/a%2F..%2Fb", "/v1/monitors/a%2F..%2Fb/runs"]
+
+
 # --- routes ---
 
 def test_routes_contract_validation_and_idempotency():

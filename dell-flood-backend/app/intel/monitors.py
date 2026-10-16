@@ -22,6 +22,8 @@ from app.intel.store import IntelStore
 from app.intel.tinyfish_client import TinyFishClient, TinyFishError
 
 _CRON = re.compile(r"^(\S+\s+){4}\S+$")
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_INVALID_ID = {"status": "ignored", "reason": "invalid id"}
 MAX_MONITORS = 50
 
 
@@ -154,10 +156,14 @@ class MonitorService:
             raise WebhookUnauthorized("bad webhook token")
         if not isinstance(payload, dict):
             return {"status": "ignored", "reason": "unrecognised payload"}
-        if payload.get("fetch_monitor_id") or payload.get("search_monitor_id"):
-            return self._monitor_event(payload)
+        monitor_id = payload.get("fetch_monitor_id") or payload.get("search_monitor_id")
+        if monitor_id:
+            event_id = payload.get("id") or ""
+            if not _plain_id(monitor_id) or (event_id and not _plain_id(event_id)):
+                return _INVALID_ID
+            return self._monitor_event(monitor_id, event_id)
         if payload.get("run_id") and payload.get("event"):
-            return self._run_event(str(payload["run_id"]))
+            return self._run_event(payload["run_id"]) if _plain_id(payload["run_id"]) else _INVALID_ID
         return {"status": "ignored", "reason": "unrecognised payload"}
 
     def _once(self, key: str, process) -> dict | None:
@@ -177,9 +183,7 @@ class MonitorService:
 
         return self._once(f"run:{run_id}", process) or {"status": "duplicate", "run_id": run_id}
 
-    def _monitor_event(self, payload: dict) -> dict:
-        monitor_id = str(payload.get("fetch_monitor_id") or payload.get("search_monitor_id"))
-        event_id = str(payload.get("id") or "")
+    def _monitor_event(self, monitor_id: str, event_id: str) -> dict:
         record = self._store.get_monitor(monitor_id)
         if record is None:
             return {"status": "ignored", "reason": "unknown monitor"}
@@ -204,6 +208,10 @@ class MonitorService:
         products = tuple(ProductId(p) for p in record.get("products") or []) or DEFAULT_PRODUCTS
         run = self._runner.start(RunRequest(location=location, products=products))
         return {"status": "change_detected", "monitor_id": monitor_id, "run_id": run.run_id}
+
+
+def _plain_id(value: object) -> bool:
+    return isinstance(value, str) and _ID.fullmatch(value) is not None
 
 
 def _public(record: dict) -> dict:

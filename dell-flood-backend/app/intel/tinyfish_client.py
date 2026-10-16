@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -361,12 +362,12 @@ class TinyFishClient:
         return str(body["run_id"])
 
     def get_run(self, run_id: str) -> AgentRun:
-        body = self._request("GET", f"{self._settings.agent_base_url}/v1/runs/{run_id}",
+        body = self._request("GET", f"{self._settings.agent_base_url}/v1/runs/{_seg(run_id)}",
                              params={"screenshots": "none", "html": "none"})
         return _normalize_run(body)
 
     def cancel_run(self, run_id: str) -> str:
-        body = self._request("POST", f"{self._settings.agent_base_url}/v1/runs/{run_id}/cancel")
+        body = self._request("POST", f"{self._settings.agent_base_url}/v1/runs/{_seg(run_id)}/cancel")
         return str(body.get("status") or "")
 
     def stream_agent_run(self, url: str, goal: str, output_schema: dict | None = None, *,
@@ -505,7 +506,7 @@ class TinyFishClient:
 
     def get_research(self, research_run_id: str) -> ResearchRun:
         return _normalize_research(
-            self._request("GET", f"{self._settings.agent_base_url}/v1/research-run/{research_run_id}"))
+            self._request("GET", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_run_id)}"))
 
     def run_research(self, query: str, *, domains: tuple[str, ...], recency_minutes: int | None = None,
                      cancel_event: threading.Event | None = None) -> ResearchRun:
@@ -516,7 +517,7 @@ class TinyFishClient:
             if run.terminal:
                 return run
             if (cancel_event is not None and cancel_event.is_set()) or self._clock() >= deadline:
-                self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{research_id}/cancel")
+                self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_id)}/cancel")
                 if cancel_event is not None and cancel_event.is_set():
                     raise TinyFishCancelled("cancelled", run_id=research_id)
                 raise TinyFishTimeout("research run timed out", run_id=research_id)
@@ -541,15 +542,20 @@ class TinyFishClient:
         return [_normalize_monitor(m) for m in body.get("monitors") or [] if isinstance(m, dict)]
 
     def get_monitor(self, monitor_id: str) -> Monitor:
-        return _normalize_monitor(self._request("GET", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}"))
+        return _normalize_monitor(self._request("GET", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}"))
 
     def delete_monitor(self, monitor_id: str) -> bool:
-        body = self._request("DELETE", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}")
+        body = self._request("DELETE", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}")
         return bool(body.get("deleted"))
 
     def trigger_monitor(self, monitor_id: str) -> dict:
-        body = self._request("POST", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}/runs")
+        body = self._request("POST", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}/runs")
         return body.get("run") if isinstance(body.get("run"), dict) else {}
+
+
+def _seg(value: str) -> str:
+    """One URL path segment: ids come from webhooks and remote bodies, so '/' and '..' must not escape it."""
+    return quote(value, safe="")
 
 
 def _retry_after_header(response: httpx.Response) -> float | None:
