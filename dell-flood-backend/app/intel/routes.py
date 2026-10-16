@@ -22,7 +22,7 @@ from app.intel.sources import SOURCES, Resolver, default_resolver, state_code
 from app.intel.store import IntelStore
 from app.intel.tinyfish_client import TinyFishClient, TinyFishError
 
-PLACE_PATTERN = r"^[\w\s,.'()\-]+$"
+PLACE_PATTERN = r"^[\w ,.'()\-]+$"
 MAX_WEBHOOK_BYTES = 1_000_000
 DEFAULT_MAX_AGE = timedelta(hours=6)
 
