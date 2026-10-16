@@ -7,6 +7,8 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import os
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +16,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from app.intel.routes import get_service
+    from app.intel.store import IntelStore
+
+    interrupted = IntelStore().mark_interrupted()
+    if interrupted:
+        print(f"[web-intel] marked {interrupted} run(s) left in flight by a previous process as failed", file=sys.stderr)
+    get_service()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Aegis — Multimodal 4D Flood Detection, U-RNN Nowcasting & Autonomous MCP Response System",
     description="FastAPI service for SegFormer MiT-B2 SAR+Optical fusion, U-RNN 3-Scale ConvGRU 4D depth nowcasting, Formal MCP Server, and 6-Agent LangGraph orchestration.",
     version="2.0.0",
@@ -36,9 +52,11 @@ app.add_middleware(
 
 from app.api.endpoints import router as api_router
 from app.mcp.aegis_mcp_server import mcp_router
+from app.intel.routes import intel_router
 
 app.include_router(api_router, prefix="/api")
 app.include_router(mcp_router)
+app.include_router(intel_router)
 
 
 @app.get("/")

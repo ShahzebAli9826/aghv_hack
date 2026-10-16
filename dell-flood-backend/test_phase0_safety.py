@@ -10,6 +10,7 @@ REPO_ROOT = os.path.dirname(BACKEND_DIR)
 SANDBOX_DIR = tempfile.mkdtemp(prefix="aegis_phase0_")
 
 os.environ["STRICT_AUTH"] = "true"
+os.environ.setdefault("AEGIS_APP_DB", os.path.join(SANDBOX_DIR, "flood_app.db"))
 for _secret_key in (
     "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SNS_TOPIC_ARN",
