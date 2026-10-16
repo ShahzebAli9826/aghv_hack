@@ -30,12 +30,16 @@ def safe_get(
     Returns (final_url, text). Raises DirectFetchError on any rejection or failure.
     """
     current = url
+    origin = httpx.URL(url).host
     for _ in range(MAX_REDIRECTS + 1):
         problem = url_rejection(current, domains, resolver)
         if problem:
             raise DirectFetchError(f"url rejected: {problem}")
+        hop = httpx.URL(current)
+        credentialed = hop.scheme == "https" and hop.host == origin
         try:
-            with http.stream("GET", current, headers=headers, follow_redirects=False) as response:
+            with http.stream("GET", current, headers=headers if credentialed else None,
+                             follow_redirects=False) as response:
                 if response.is_redirect:
                     location = response.headers.get("Location")
                     if not location:
