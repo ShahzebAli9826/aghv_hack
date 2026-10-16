@@ -44,8 +44,9 @@ class SNSEmergencyBroadcaster:
         shelter_name: str = "Gandhi Maidan Relief Camp",
         evacuation_url: str = "http://localhost:8081",
         custom_message: Optional[str] = None,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """Publishes a mass flood evacuation warning via Amazon SNS."""
+        """Publishes a mass flood evacuation warning via Amazon SNS. dry_run builds the message without publishing."""
         message = custom_message or (
             f"🚨 [AEGIS AWS SNS EMERGENCY BROADCAST] — {location.upper()}\n"
             f"Severity: {severity_level} | Projected Depth: {water_depth_m:.2f}m\n"
@@ -54,6 +55,16 @@ class SNSEmergencyBroadcaster:
             f"Live Evacuation Map: {evacuation_url}"
         )
         subject = f"AEGIS FLASH FLOOD ALERT: {location.upper()} ({severity_level})"
+
+        if dry_run:
+            return {
+                "provider": "AWS_SNS_DRY_RUN",
+                "message_id": None,
+                "topic_arn": self.topic_arn,
+                "subject": subject,
+                "message": message,
+                "status": "DRY_RUN_NOT_SENT",
+            }
 
         if not self.enabled or not self._sns or not self.topic_arn or "123456789012" in self.topic_arn:
             sim_id = f"sns-msg-{uuid.uuid4().hex[:10]}"

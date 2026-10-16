@@ -14,7 +14,7 @@ import {
 import { AlertCircle, CheckCircle2, Navigation, Send, Check, Camera, Trash2 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { apiService } from '../services/api';
-import { AppLanguage, t, DEFAULT_DEMO_PHONE_E164 } from '../utils/i18n';
+import { AppLanguage, t } from '../utils/i18n';
 
 interface ReportFormProps {
   username: string;

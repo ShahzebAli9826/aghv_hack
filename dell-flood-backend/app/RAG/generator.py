@@ -66,7 +66,10 @@ class SituationReportGenerator:
             "checks": checks,
         }
 
-    def generate_report(
+    def generate_report(self, *args, **kwargs) -> str:
+        return self.generate_report_with_validation(*args, **kwargs)["report_text"]
+
+    def generate_report_with_validation(
         self,
         location: str,
         area_sq_km: float,
@@ -78,7 +81,7 @@ class SituationReportGenerator:
         report_format: str = "NDMA",
         max_depth_m: float = 0.68,
         language: str = "en",
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Generates a grounded disaster situation report in the requested format (NDMA, UN_OCHA, SDMA, FIELD_BRIEF)
         and validates all numerical claims against verified pipeline telemetry (Solves P9, P17, P25, P28).
@@ -249,6 +252,5 @@ ALERT SEVERITY: {severity} | CLASSIFICATION: {classification}
    - Route evacuees along elevated time-varying Dijkstra corridors to high-ground relief shelters.
    - Distribute potable water, ORS packets, and chlorine tablets per {fmt_key} SOP guidelines."""
 
-        validated = self.validate_and_ground_numbers(raw_report, verified_stats)
-        return validated["report_text"]
+        return self.validate_and_ground_numbers(raw_report, verified_stats)
 

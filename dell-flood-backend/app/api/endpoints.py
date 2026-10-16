@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, UploadFile, File, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -34,11 +34,11 @@ from app.aegis.pipeline.impact_analyzer import (
 )
 from app.aegis.routing.dynamic_router import DynamicEvacuationRouter
 from app.agent.flood_agent import FloodAgent
+from app.agent.incident_orchestrator import HitlDraftNotFound, HitlDraftNotPending, REPORT_SEVERITY_WEIGHTS
 from app.agent.tools import (
     check_rainfall,
     check_gauge,
     trigger_voice_call as agent_trigger_voice_call,
-    DEFAULT_DEMO_CALL_NUMBER,
 )
 from app.RAG.generator import SituationReportGenerator
 from app.api.auth_deps import (
@@ -48,6 +48,7 @@ from app.api.auth_deps import (
     escape_html,
     slugify_location,
     normalize_and_validate_phone,
+    require_official,
 )
 
 router = APIRouter()
@@ -111,9 +112,9 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT INTO users (username, password_hash, role, phone) VALUES (?, ?, ?, ?)", [
-            ("saif", hash_password_salted("123"), "official", DEFAULT_DEMO_CALL_NUMBER),
-            ("shah", hash_password_salted("123"), "citizen", DEFAULT_DEMO_CALL_NUMBER),
-            ("saif_official", hash_password_salted("123"), "official", DEFAULT_DEMO_CALL_NUMBER)
+            ("saif", hash_password_salted("123"), "official", None),
+            ("shah", hash_password_salted("123"), "citizen", None),
+            ("saif_official", hash_password_salted("123"), "official", None)
         ])
     conn.commit()
     conn.close()
@@ -124,7 +125,7 @@ init_db()
 class RegisterRequest(BaseModel):
     username: str
     password: str
-    role: str
+    role: Optional[str] = None
     phone: str
     expo_push_token: Optional[str] = None
 
@@ -151,7 +152,7 @@ class DetectionRequest(BaseModel):
     cloud_cover: float = 12.0
 
 class VoiceCallRequest(BaseModel):
-    phone_number: Optional[str] = DEFAULT_DEMO_CALL_NUMBER
+    phone_number: Optional[str] = None
     message: Optional[str] = ""
     location: Optional[str] = "Patna District"
     severity: Optional[str] = "CRITICAL"
@@ -188,7 +189,7 @@ class AgentCycleRequest(BaseModel):
     phones: list = []
     report_format: Optional[str] = "DM_EXECUTIVE"
     language: Optional[str] = "en"
-    require_hitl_for_calls: bool = False
+    require_hitl_for_calls: bool = True
 
 # --- Direct SMTP Email Sender ---
 def send_smtp_email(to_email: str, subject: str, body: str, attachment_path: str = None):
@@ -277,16 +278,16 @@ def register_user(payload: RegisterRequest):
         safe_phone = normalize_and_validate_phone(payload.phone)
         cursor.execute(
             "INSERT INTO users (username, password_hash, role, phone, expo_push_token) VALUES (?, ?, ?, ?, ?)",
-            (safe_username, hash_password_salted(payload.password), payload.role, safe_phone, payload.expo_push_token)
+            (safe_username, hash_password_salted(payload.password), "citizen", safe_phone, payload.expo_push_token)
         )
         conn.commit()
         cognito_bundle = {}
         try:
             from app.aws import cognito_service
-            cognito_bundle = cognito_service.issue_token(safe_username, payload.role or "Citizen")
+            cognito_bundle = cognito_service.issue_token(safe_username, "citizen")
         except Exception:
             pass
-        return {"status": "SUCCESS", "aws_cognito": cognito_bundle}
+        return {"status": "SUCCESS", "role": "citizen", "aws_cognito": cognito_bundle}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="Username exists.")
     finally:
@@ -320,15 +321,18 @@ def login_user(payload: LoginRequest):
         "aws_cognito": cognito_bundle,
     }
 
-# --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint (Defaults to +917678656930) ---
-@router.post("/alerts/voice")
+# --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint ---
+@router.post("/alerts/voice", dependencies=[Depends(require_official)])
 def trigger_voice_call(payload: VoiceCallRequest):
+    target_phone = normalize_and_validate_phone(payload.phone_number)
+    if target_phone is None:
+        raise HTTPException(status_code=400, detail="phone_number is missing or not a valid E.164 number; no call was placed.")
     loc = payload.location or "Patna District"
     sev = payload.severity or "CRITICAL"
     lang = payload.language or "hi"
     depth = payload.max_depth_m if payload.max_depth_m is not None else 0.68
     res = agent_trigger_voice_call(
-        phone_number=payload.phone_number or DEFAULT_DEMO_CALL_NUMBER,
+        phone_number=target_phone,
         message=payload.message or "",
         location=loc,
         severity=sev,
@@ -349,12 +353,12 @@ def trigger_voice_call(payload: VoiceCallRequest):
     return res
 
 # --- Direct SMTP Email Endpoint ---
-@router.post("/alerts/email")
+@router.post("/alerts/email", dependencies=[Depends(require_official)])
 def trigger_email_alert(payload: EmailAlertRequest):
     return send_smtp_email(payload.to_email, payload.subject, payload.message)
 
 # --- LLM-Generated RAG Report SMTP Dispatch ---
-@router.post("/alerts/email-report")
+@router.post("/alerts/email-report", dependencies=[Depends(require_official)])
 def email_rag_report(payload: EmailReportRequest):
     try:
         report_text = rag_generator.generate_report(
@@ -968,7 +972,7 @@ def download_report(location: str, lat: float, lon: float, area: float, classifi
         headers=s3_headers,
     )
 
-@router.post("/notifications/broadcast")
+@router.post("/notifications/broadcast", dependencies=[Depends(require_official)])
 def broadcast_notification(payload: BroadcastNotificationRequest):
     # Fetch all tokens
     conn = sqlite3.connect(DB_PATH)
@@ -1448,6 +1452,7 @@ def run_pipeline_task(job_id: str, lat: float, lon: float, cloud_cover: float = 
             "horizons_min": urnn_nowcast["horizons_min"],
             "latency_ms": urnn_nowcast.get("latency_ms", 42.5),
             "speedup_vs_mike_plus": urnn_nowcast.get("speedup_vs_mike_plus", "140x faster"),
+            "depth_provenance": urnn_nowcast["depth_provenance"],
             "max_depth_0m": urnn_nowcast["max_depth_0m"],
             "max_depth_15m": urnn_nowcast["max_depth_15m"],
             "max_depth_30m": urnn_nowcast["max_depth_30m"],
@@ -1750,7 +1755,13 @@ def report_flood(payload: CrowdReportRequest, background_tasks: BackgroundTasks 
         auto_triggered = True
         loc_label = safe_loc or f"Cluster ({payload.lat:.3f}, {payload.lon:.3f})"
         if background_tasks is not None:
-            background_tasks.add_task(agent.run_cycle, loc_label, payload.lat, payload.lon, [DEFAULT_DEMO_CALL_NUMBER])
+            background_tasks.add_task(
+                agent.run_cycle,
+                location=loc_label,
+                lat=payload.lat,
+                lon=payload.lon,
+                require_hitl_for_calls=True,
+            )
 
     return {
         "status": "SUCCESS",
@@ -1793,16 +1804,6 @@ def get_complaints():
     total_resolved = 0
     location_groups = {}
     
-    SEVERITY_WEIGHTS = {
-        "CRITICAL": 100.0,
-        "SEVERE": 92.0,
-        "HIGH": 80.0,
-        "MODERATE": 60.0,
-        "MEDIUM": 60.0,
-        "LOW": 35.0,
-        "MINOR": 25.0,
-    }
-    
     for r in rows:
         c_sev = (r[4] or "MODERATE").upper()
         c_confirmed = int(r[7] or 0)
@@ -1810,7 +1811,7 @@ def get_complaints():
         img_b64 = r[10] if len(r) > 10 and r[10] else ""
         
         # P24: Explicit 60% user-reported severity + 40% model/telemetry confidence
-        user_sev_score = SEVERITY_WEIGHTS.get(c_sev, 60.0)
+        user_sev_score = REPORT_SEVERITY_WEIGHTS.get(c_sev, 60.0)
         model_conf_score = 92.0 if c_confirmed == 1 else 45.0
         if img_b64:
             model_conf_score = min(100.0, model_conf_score + 6.0)
@@ -1896,7 +1897,7 @@ def resolve_complaint(payload: ResolveRequest):
 # --- 6-Agent LangGraph Supervisor Trace Routes (P26, P27, P28) ---
 @router.post("/agent-cycle")
 @router.post("/agent/trigger-cycle")
-def run_agent_cycle(payload: AgentCycleRequest):
+def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(require_official)):
     lat = payload.lat
     lon = payload.lon
     
@@ -1913,10 +1914,11 @@ def run_agent_cycle(payload: AgentCycleRequest):
         location=payload.location,
         lat=lat,
         lon=lon,
-        phones=payload.phones or [DEFAULT_DEMO_CALL_NUMBER],
+        phones=payload.phones,
         report_format=payload.report_format or "DM_EXECUTIVE",
         language=payload.language or "en",
         require_hitl_for_calls=payload.require_hitl_for_calls,
+        requested_by=user["username"],
     )
     AGENT_TRACES[payload.location] = res
     return {
@@ -1942,7 +1944,7 @@ def run_agent_cycle(payload: AgentCycleRequest):
         "rainfall_24h_mm": res.get("rainfall_24h_mm", 0.0),
     }
 
-@router.get("/agent-trace")
+@router.get("/agent-trace", dependencies=[Depends(require_official)])
 def get_agent_trace(location: str):
     if location in AGENT_TRACES:
         return AGENT_TRACES[location]
@@ -2587,6 +2589,7 @@ def get_urnn_nowcast(
             "horizons_min": nowcast["horizons_min"],
             "latency_ms": nowcast.get("latency_ms", 42.5),
             "speedup_vs_mike_plus": nowcast.get("speedup_vs_mike_plus", "140x faster"),
+            "depth_provenance": nowcast["depth_provenance"],
             "max_depth_0m": nowcast["max_depth_0m"],
             "max_depth_15m": nowcast["max_depth_15m"],
             "max_depth_30m": nowcast["max_depth_30m"],
@@ -2612,18 +2615,24 @@ class HITLApproveRequest(BaseModel):
     item_id: Any
     language: Optional[str] = "hi"
 
-@router.get("/hitl/queue")
+@router.get("/hitl/queue", dependencies=[Depends(require_official)])
 def list_hitl_queue(status: str = "PENDING"):
     fn = getattr(agent, "get_hitl_queue", None)
     items = fn(status=status) if callable(fn) else []
     return {"status": "SUCCESS", "items": items}
 
 @router.post("/hitl/approve")
-def approve_hitl_item(payload: HITLApproveRequest):
-    fn = getattr(agent, "approve_hitl_action", None)
-    if callable(fn):
-        return fn(item_id=str(payload.item_id), language=payload.language or "hi")
-    return {"status": "SUCCESS", "item_id": payload.item_id, "target_phone": "+917678656930"}
+def approve_hitl_item(payload: HITLApproveRequest, user: Dict[str, Any] = Depends(require_official)):
+    try:
+        return agent.approve_hitl_action(
+            item_id=str(payload.item_id),
+            approved_by=user["username"],
+            language=payload.language or "hi",
+        )
+    except HitlDraftNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except HitlDraftNotPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 @router.get("/alerts/cap")
 def get_cap_alert_for_location(
@@ -2808,7 +2817,7 @@ def get_aws_cloudwatch_telemetry():
     return cloudwatch_service.get_dashboard_summary()
 
 
-@router.post("/alerts/broadcast-sns")
+@router.post("/alerts/broadcast-sns", dependencies=[Depends(require_official)])
 def trigger_sns_emergency_broadcast(payload: SNSBroadcastRequest):
     """Publishes a mass flood evacuation alert via Amazon SNS Topic."""
     from app.aws import sns_service
@@ -2821,7 +2830,7 @@ def trigger_sns_emergency_broadcast(payload: SNSBroadcastRequest):
     )
 
 
-@router.post("/alerts/voice-polly")
+@router.post("/alerts/voice-polly", dependencies=[Depends(require_official)])
 def trigger_polly_voice_synthesis(payload: PollySynthesizeRequest):
     """Synthesizes Hindi or English emergency voice audio using Amazon Polly Neural TTS."""
     from app.aws import polly_service
@@ -2840,7 +2849,7 @@ def list_dynamodb_ground_reports(limit: int = 50):
     return {"status": "SUCCESS", "count": len(items), "items": items}
 
 
-@router.post("/aws/test-mcp-suite")
+@router.post("/aws/test-mcp-suite", dependencies=[Depends(require_official)])
 def run_aws_free_tier_mcp_diagnostic_suite(
     location: str = "Patna District",
     lat: float = 25.6124,
@@ -2871,8 +2880,7 @@ def translate_advisory_aws(payload: AWSTranslateRequest):
     )
 
 
-@router.post("/aws/provision")
-@router.get("/aws/provision")
+@router.post("/aws/provision", dependencies=[Depends(require_official)])
 def provision_aws_free_tier_resources():
     """Idempotently creates or verifies all AWS Free Tier resources (S3, DynamoDB, SNS, SQS FIFO, SSM) when keys exist, or returns a simulation blueprint offline."""
     from app.aws import aws_provisioner

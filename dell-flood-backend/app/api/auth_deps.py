@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import hmac
 import json
 import time
@@ -10,7 +11,19 @@ import secrets
 from typing import Dict, Any, Optional
 from fastapi import Header, HTTPException, Depends
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "aegis-crisis-command-secret-key-2026-ndma")
+
+def _load_jwt_secret() -> str:
+    secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    if secret and not secret.startswith("your_"):
+        return secret
+    print(
+        "[auth] JWT_SECRET_KEY is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        file=sys.stderr,
+    )
+    return secrets.token_urlsafe(48)
+
+
+JWT_SECRET_KEY = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRE_SECONDS = 86400 * 7  # 7 days
 
@@ -94,7 +107,7 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
         if cog_user:
             return {
                 "sub": cog_user.get("username", "official"),
-                "role": cog_user.get("role", "official"),
+                "role": cog_user.get("role", "citizen"),
                 "provider": cog_user.get("provider", "AMAZON_COGNITO"),
             }
     except Exception:
@@ -118,6 +131,10 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _strict_auth() -> bool:
+    return os.getenv("STRICT_AUTH", "true").strip().lower() != "false"
+
+
 async def get_current_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """FastAPI dependency extracting current user from Amazon Cognito Bearer JWT (Solves P1)."""
     if authorization and authorization.lower().startswith("bearer "):
@@ -126,12 +143,12 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
         if payload:
             return {
                 "username": payload.get("sub", "official"),
-                "role": payload.get("role", "official"),
+                "role": payload.get("role", "citizen"),
                 "auth_provider": payload.get("provider", "AMAZON_COGNITO_JWT"),
             }
-        if os.getenv("STRICT_AUTH", "false").lower() == "true":
+        if _strict_auth():
             raise HTTPException(status_code=401, detail="Invalid or expired Cognito JWT token")
-    if os.getenv("STRICT_AUTH", "false").lower() == "true":
+    if _strict_auth():
         raise HTTPException(status_code=401, detail="Authorization Bearer token required")
     return {"username": "demo_official", "role": "official", "auth_provider": "AMAZON_COGNITO_COMPATIBLE"}
 
@@ -156,20 +173,15 @@ def slugify_location(location: str) -> str:
     return cleaned[:48] or "flood_report"
 
 
-def normalize_and_validate_phone(phone: Optional[str], default_demo: str = "+917678656930") -> str:
-    """
-    Validates E.164 phone format and defaults to the user's demonstration phone
-    +917678656930 (7678656930) when empty or during demo mode (Solves P2 & P34).
-    """
+def normalize_and_validate_phone(phone: Optional[str]) -> Optional[str]:
+    """Returns the E.164 form of phone (bare 10-digit numbers get +91), or None when it is empty or invalid."""
     if not phone or not str(phone).strip():
-        return default_demo
+        return None
     raw = re.sub(r"[\s\-\(\)]", "", str(phone).strip())
-    if raw == "7678656930" or raw.endswith("7678656930"):
-        return "+917678656930"
     if len(raw) == 10 and raw.isdigit():
         raw = f"+91{raw}"
     if not re.match(r"^\+[1-9]\d{7,14}$", raw):
-        return default_demo
+        return None
     return raw
 
 
