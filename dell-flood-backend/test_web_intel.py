@@ -209,7 +209,12 @@ def test_missing_or_whitespace_key_means_disabled():
 
     service = build_service(load_settings({}), store=IntelStore(os.path.join(tempfile.mkdtemp(), "d.db")))
     client = api(service)
-    assert client.get("/api/agent/web-intelligence/config").json()["mode"] == "disabled"
+    config = client.get("/api/agent/web-intelligence/config").json()
+    assert (config["mode"], config["disabled_reason"]) == ("disabled", "TINYFISH_API_KEY not set")
+    assert [load_settings(env).disabled_reason for env in (
+        {"TINYFISH_API_KEY": KEY, "TINYFISH_ENABLED": "false"}, {"TINYFISH_API_KEY": KEY, "TINYFISH_MODE": "disabled"},
+        {"TINYFISH_API_KEY": "  "}, {"TINYFISH_API_KEY": KEY}, {"TINYFISH_MODE": "replay"})] == [
+        "TINYFISH_ENABLED=false", "TINYFISH_MODE=disabled", "TINYFISH_API_KEY not set", None, None]
     started = client.post("/api/agent/web-intelligence/run",
                           json={"location": "Siwan", "lat": 26.22, "lon": 84.36, "state": "Bihar", "district": "Siwan"})
     assert started.status_code == 202
@@ -910,7 +915,8 @@ def test_routes_contract_validation_and_idempotency():
     base = "/api/agent/web-intelligence"
 
     config = client.get(f"{base}/config").json()
-    assert (config["mode"], config["enabled"], config["schema_version"]) == ("live", True, "1.1")
+    assert (config["mode"], config["enabled"], config["schema_version"], config["disabled_reason"]) == (
+        "live", True, "1.1", None)
     assert config["default_products"] == ["river_levels", "imd_warnings", "official_alerts", "state_bulletin"]
     assert config["limits"]["max_concurrent_agent_runs"] == 2
     assert [p["id"] for p in config["products"]] == [p.value for p in PRODUCTS]

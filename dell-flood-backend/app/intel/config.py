@@ -37,6 +37,7 @@ class Settings:
     public_base_url: str | None = None
     imd_api_key: str | None = field(default=None, repr=False)
     task_workers: int = 6
+    disabled_reason: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -101,15 +102,19 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     enabled_flag = _flag(env, "TINYFISH_ENABLED", True)
 
     requested = (_text(env, "TINYFISH_MODE") or "").lower()
+    mode, disabled_reason = Mode.live, None
     if requested == Mode.replay:
         mode = Mode.replay
-    elif requested == Mode.disabled or not enabled_flag:
-        mode = Mode.disabled
-    else:
-        mode = Mode.live if api_key else Mode.disabled
+    elif requested == Mode.disabled:
+        mode, disabled_reason = Mode.disabled, "TINYFISH_MODE=disabled"
+    elif not enabled_flag:
+        mode, disabled_reason = Mode.disabled, "TINYFISH_ENABLED=false"
+    elif not api_key:
+        mode, disabled_reason = Mode.disabled, "TINYFISH_API_KEY not set"
 
     return Settings(
         mode=mode,
+        disabled_reason=disabled_reason,
         api_key=api_key if mode is Mode.live else None,
         agent_base_url=_https_url(env, "TINYFISH_AGENT_BASE_URL") or "https://agent.tinyfish.ai",
         max_concurrent_agent_runs=int(_number(env, "TINYFISH_MAX_CONCURRENT_AGENT_RUNS", 2, 1, 10)),

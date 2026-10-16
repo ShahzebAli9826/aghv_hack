@@ -209,6 +209,7 @@ def get_config(_: dict = Official, service: IntelService = Depends(get_service))
         "schema_version": SCHEMA_VERSION,
         "mode": service.runner.mode.value,
         "enabled": service.runner.mode is not Mode.disabled,
+        "disabled_reason": service.settings.disabled_reason if service.runner.mode is Mode.disabled else None,
         "products": [p.describe() for p in PRODUCTS.values()],
         "default_products": [p.value for p in DEFAULT_PRODUCTS],
         "limits": service.settings.limits(),
