@@ -673,10 +673,11 @@ class IntelRunner:
             handle.done.wait(timeout)
         return self.get(run_id)
 
-    def _set_live_view(self, handle: _Handle, url: str, tinyfish_run_id: str | None) -> None:
+    def _set_live_view(self, handle: _Handle, task: SourceTask, url: str, tinyfish_run_id: str | None) -> None:
         with handle.lock:
             handle.live_view = LiveView(streaming_url=url, expires_at=self._now() + LIVE_VIEW_TTL,
-                                        tinyfish_run_id=tinyfish_run_id)
+                                        tinyfish_run_id=tinyfish_run_id, source_id=task.source.id,
+                                        product_id=task.product.id)
 
     def _save(self, handle: _Handle) -> None:
         self.store.save_run(self.snapshot(handle), handle.request.key)
@@ -701,7 +702,7 @@ class IntelRunner:
                 ctx = ExecCtx(
                     gateway=self.gateway, settings=self.settings, location=request.location, inputs=inputs,
                     ledger=handle.ledger, cancel_event=handle.cancel_event,
-                    on_streaming_url=lambda url, rid, h=handle: self._set_live_view(h, url, rid),
+                    on_streaming_url=lambda url, rid, h=handle, t=task: self._set_live_view(h, t, url, rid),
                     sleep=self._sleep, meta=TaskMeta(), webhook_url=self._webhook_url(),
                 )
                 futures.append(self._task_pool.submit(self._run_one, handle, index, task, ctx))

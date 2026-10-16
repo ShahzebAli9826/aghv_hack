@@ -205,6 +205,8 @@ class LiveView(_Model):
     streaming_url: str = Field(max_length=2048)
     expires_at: datetime
     tinyfish_run_id: str | None = Field(default=None, max_length=128)
+    source_id: str | None = Field(default=None, max_length=64)
+    product_id: ProductId | None = None
 
 
 class LocationQuery(_Model):

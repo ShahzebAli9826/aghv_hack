@@ -770,8 +770,8 @@ def test_stream_exposes_live_view_only_while_running():
     while time.time() < deadline and not live:
         live = client.get(f"/api/agent/web-intelligence/{started['run_id']}").json()["live_view"]
         time.sleep(0.02)
-    assert live["streaming_url"] == "https://live.tinyfish.ai/s/abc"
-    assert live["tinyfish_run_id"] == "run_sse"
+    assert (live["streaming_url"], live["tinyfish_run_id"], live["source_id"], live["product_id"]) == (
+        "https://live.tinyfish.ai/s/abc", "run_sse", "cwc_ffs", "river_levels")
     gate.set()
     done = service.runner.wait(started["run_id"], 10)
     assert done.state is RunState.succeeded
