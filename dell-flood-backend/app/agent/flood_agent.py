@@ -196,6 +196,7 @@ class FloodAgent:
             "escalation_tier": orch_res["escalation_tier"],
             "escalation_reasons": orch_res["escalation_reasons"],
             "classification": classification,
+            "input_provenance": eo_data.get("input_provenance"),
             "area_sq_km": area_sq_km,
             "peak_depth_m": peak_depth_m,
             "gauge_status": gauge_status,
