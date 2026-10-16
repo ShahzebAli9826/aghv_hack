@@ -243,6 +243,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "severity_level": {"type": "string"},
                 "water_depth_m": {"type": "number"},
                 "shelter_name": {"type": "string"},
+                "dry_run": {"type": "boolean"},
             },
             "required": ["location", "severity_level"],
         },
@@ -667,6 +668,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             severity_level=str(arguments.get("severity_level", "CRITICAL")),
             water_depth_m=float(arguments.get("water_depth_m", 1.2)),
             shelter_name=str(arguments.get("shelter_name", "Gandhi Maidan Relief Camp")),
+            dry_run=bool(arguments.get("dry_run", False)),
         )
 
     elif tool_name == "aws_synthesize_voice_polly":
@@ -786,7 +788,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon S3", "aws_upload_report_s3", {"local_filepath": "./reports/report_patna_district_1787128244.pdf"}),
             ("Amazon DynamoDB (Reports)", "aws_record_ground_report_dynamodb", {"location_name": location, "severity": "CRITICAL", "water_depth": "Chest-deep"}),
             ("Amazon DynamoDB (Shelters)", "aws_manage_shelters_dynamodb", {"action": "list"}),
-            ("Amazon SNS", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84}),
+            ("Amazon SNS (dry run, nothing published)", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84, "dry_run": True}),
             ("Amazon Polly", "aws_synthesize_voice_polly", {"text": f"सावधान! {location} में बाढ़ की चेतावनी।", "language": "hi-IN"}),
             ("Amazon Cognito", "aws_verify_cognito_identity", {"username": "ndrf_commander", "role": "IncidentCommander"}),
             ("Amazon CloudWatch", "aws_get_cloudwatch_metrics", {}),

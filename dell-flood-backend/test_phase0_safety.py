@@ -46,8 +46,17 @@ sys.modules["chromadb"] = None
 sys.path.insert(0, BACKEND_DIR)
 os.chdir(SANDBOX_DIR)
 
+import numpy as np
 from fastapi.testclient import TestClient
 import main
+from app.agent import incident_orchestrator
+from app.api import endpoints
+from app.aws import sns_service
+from app.ml.inference import get_shared_model
+
+sys.modules["app.aws.dynamodb_service"].LOCAL_FALLBACK_FILE = os.path.join(SANDBOX_DIR, "dynamodb_local_cache.json")
+incident_orchestrator.DB_PATH = os.path.join(SANDBOX_DIR, "flood_app.db")
+incident_orchestrator._init_orchestrator_tables()
 
 client = TestClient(main.app)
 
@@ -87,6 +96,38 @@ def _login(username, password="123"):
 
 def _official_headers():
     return {"Authorization": f"Bearer {_login('saif')['token']}"}
+
+
+class _ModelProbability:
+    """No trained checkpoint ships with the repo, so tests pin the SegFormer probability map."""
+
+    def __init__(self, value):
+        self.value = value
+        self.model = get_shared_model()
+
+    def __enter__(self):
+        self.model.run_inference = lambda *args, **kwargs: np.full((512, 512), self.value, dtype=np.float32)
+
+    def __exit__(self, *exc):
+        del self.model.run_inference
+
+
+class _SnsRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def __enter__(self):
+        sns_service.broadcast_flood_warning = lambda **kwargs: self.calls.append(kwargs) or {"status": "RECORDED"}
+        return self
+
+    def __exit__(self, *exc):
+        del sns_service.broadcast_flood_warning
+
+
+def _pending_draft_ids(headers):
+    res = client.get("/api/hitl/queue", headers=headers)
+    assert res.status_code == 200, res.text
+    return {item["draft_id"]: item for item in res.json()["items"]}
 
 
 def test_gated_routes_reject_anonymous_callers():
@@ -146,6 +187,92 @@ def test_mcp_execute_refuses_dispatch_tools_even_for_officials():
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["tool_name"] == "get_rainfall_telemetry"
     assert allowed.json()["data"]["antecedent_rain_5d_mm"] == 0.0
+
+
+def test_hitl_approve_unknown_draft_is_404():
+    res = client.post("/api/hitl/approve", json={"item_id": "hitl_doesnotexist"}, headers=_official_headers())
+    assert res.status_code == 404
+    assert res.json()["detail"] == "HITL draft hitl_doesnotexist does not exist"
+
+
+def test_agent_cycle_drafts_without_broadcasting_and_approval_dispatches_once():
+    headers = _official_headers()
+    with _ModelProbability(0.95), _SnsRecorder() as sns:
+        result = endpoints.agent.run_cycle(
+            location="Phase0 Wet Ward",
+            lat=25.6124,
+            lon=85.1376,
+            phones=["+15555550123"],
+            language="en",
+        )
+        draft_id = result["hitl_draft_id"]
+        assert sns.calls == []
+        assert result["voice_dispatched"] == {}
+        assert _pending_draft_ids(headers)[draft_id]["status"] == "PENDING"
+
+        approved = client.post("/api/hitl/approve", json={"item_id": draft_id, "language": "en"}, headers=headers)
+        assert approved.status_code == 200, approved.text
+        body = approved.json()
+        assert (body["status"], body["approved_by"], body["draft"]["location"]) == ("APPROVED_AND_DISPATCHED", "saif", "Phase0 Wet Ward")
+        assert [(c["location"], c["severity_level"]) for c in sns.calls] == [("Phase0 Wet Ward", "CRITICAL")]
+
+        again = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        assert again.status_code == 409
+        assert again.json()["detail"] == f"HITL draft {draft_id} is APPROVED_AND_DISPATCHED, not PENDING_OFFICIAL_APPROVAL"
+        assert len(sns.calls) == 1
+        assert draft_id not in _pending_draft_ids(headers)
+
+
+def test_skipping_hitl_requires_a_named_official():
+    try:
+        endpoints.agent.run_cycle(location="Nowhere", lat=0.0, lon=0.0, require_hitl_for_calls=False)
+    except ValueError as exc:
+        assert str(exc) == "Skipping the HITL queue needs the requesting official as requested_by."
+    else:
+        raise AssertionError("run_cycle accepted an anonymous auto-approval")
+
+
+def test_complaint_cluster_creates_a_pending_draft_only():
+    headers = _official_headers()
+    before = set(_pending_draft_ids(headers))
+    with _ModelProbability(0.95), _SnsRecorder() as sns:
+        triggered = []
+        for i in range(3):
+            res = client.post("/api/report-flood", json={
+                "username": f"phase0_reporter_{i}", "lat": 26.2001 + i * 0.001, "lon": 84.3001,
+                "severity": "HIGH", "description": "water entering homes", "location_name": "Phase0 Cluster Ward",
+            })
+            assert res.status_code == 200, res.text
+            triggered.append(res.json()["agent_auto_triggered"])
+        assert triggered == [False, False, True]
+        assert sns.calls == []
+    new_drafts = [d for draft_id, d in _pending_draft_ids(headers).items() if draft_id not in before]
+    assert [(d["location"], d["status"]) for d in new_drafts] == [("Phase0 Cluster Ward", "PENDING")]
+
+
+def test_diagnostic_suite_never_publishes_to_sns():
+    class RecordingSnsClient:
+        def __init__(self):
+            self.published = []
+
+        def publish(self, **kwargs):
+            self.published.append(kwargs)
+            return {"MessageId": "fake-message"}
+
+    fake = RecordingSnsClient()
+    saved = (sns_service.enabled, sns_service._sns, sns_service.topic_arn)
+    sns_service.enabled, sns_service._sns, sns_service.topic_arn = True, fake, "arn:aws:sns:ap-south-1:111111111111:phase0"
+    try:
+        res = client.post("/api/aws/test-mcp-suite", headers=_official_headers())
+        assert res.status_code == 200, res.text
+        sns_rows = [r for r in res.json()["data"]["results"] if r["mcp_tool"] == "aws_broadcast_alert_sns"]
+        assert [r["service"] for r in sns_rows] == ["Amazon SNS (dry run, nothing published)"]
+        assert fake.published == []
+        live = sns_service.broadcast_flood_warning(location="Phase0 Live Check")
+        assert live["status"] == "BROADCAST_DISPATCHED_LIVE"
+        assert [p["Subject"] for p in fake.published] == ["AEGIS FLASH FLOOD ALERT: PHASE0 LIVE CHECK (CRITICAL)"]
+    finally:
+        sns_service.enabled, sns_service._sns, sns_service.topic_arn = saved
 
 
 def test_cors_default_has_no_wildcard():

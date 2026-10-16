@@ -34,6 +34,7 @@ from app.aegis.pipeline.impact_analyzer import (
 )
 from app.aegis.routing.dynamic_router import DynamicEvacuationRouter
 from app.agent.flood_agent import FloodAgent
+from app.agent.incident_orchestrator import HitlDraftNotFound, HitlDraftNotPending
 from app.agent.tools import (
     check_rainfall,
     check_gauge,
@@ -189,7 +190,7 @@ class AgentCycleRequest(BaseModel):
     phones: list = []
     report_format: Optional[str] = "DM_EXECUTIVE"
     language: Optional[str] = "en"
-    require_hitl_for_calls: bool = False
+    require_hitl_for_calls: bool = True
 
 # --- Direct SMTP Email Sender ---
 def send_smtp_email(to_email: str, subject: str, body: str, attachment_path: str = None):
@@ -1751,7 +1752,14 @@ def report_flood(payload: CrowdReportRequest, background_tasks: BackgroundTasks 
         auto_triggered = True
         loc_label = safe_loc or f"Cluster ({payload.lat:.3f}, {payload.lon:.3f})"
         if background_tasks is not None:
-            background_tasks.add_task(agent.run_cycle, loc_label, payload.lat, payload.lon, [DEFAULT_DEMO_CALL_NUMBER])
+            background_tasks.add_task(
+                agent.run_cycle,
+                location=loc_label,
+                lat=payload.lat,
+                lon=payload.lon,
+                phones=[DEFAULT_DEMO_CALL_NUMBER],
+                require_hitl_for_calls=True,
+            )
 
     return {
         "status": "SUCCESS",
@@ -1918,6 +1926,7 @@ def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(r
         report_format=payload.report_format or "DM_EXECUTIVE",
         language=payload.language or "en",
         require_hitl_for_calls=payload.require_hitl_for_calls,
+        requested_by=user["username"],
     )
     AGENT_TRACES[payload.location] = res
     return {
@@ -2621,10 +2630,16 @@ def list_hitl_queue(status: str = "PENDING"):
 
 @router.post("/hitl/approve")
 def approve_hitl_item(payload: HITLApproveRequest, user: Dict[str, Any] = Depends(require_official)):
-    fn = getattr(agent, "approve_hitl_action", None)
-    if callable(fn):
-        return fn(item_id=str(payload.item_id), language=payload.language or "hi")
-    return {"status": "SUCCESS", "item_id": payload.item_id, "target_phone": "+917678656930"}
+    try:
+        return agent.approve_hitl_action(
+            item_id=str(payload.item_id),
+            approved_by=user["username"],
+            language=payload.language or "hi",
+        )
+    except HitlDraftNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except HitlDraftNotPending as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 @router.get("/alerts/cap")
 def get_cap_alert_for_location(

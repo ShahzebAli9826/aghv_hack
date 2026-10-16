@@ -10,6 +10,21 @@ from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
 from app.RAG.generator import SituationReportGenerator
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
+HITL_PENDING = "PENDING_OFFICIAL_APPROVAL"
+HITL_APPROVED = "APPROVED_AND_DISPATCHED"
+
+
+class HitlDraftNotFound(LookupError):
+    def __init__(self, draft_id: str):
+        super().__init__(f"HITL draft {draft_id} does not exist")
+        self.draft_id = draft_id
+
+
+class HitlDraftNotPending(RuntimeError):
+    def __init__(self, draft_id: str, status: str):
+        super().__init__(f"HITL draft {draft_id} is {status}, not {HITL_PENDING}")
+        self.draft_id = draft_id
+        self.status = status
 
 
 def _init_orchestrator_tables():
@@ -89,7 +104,6 @@ class MultiAgentIncidentOrchestrator:
         lon: float,
         language: str = "hi",
         report_format: str = "NDMA",
-        auto_approve_hitl: bool = False,
     ) -> Dict[str, Any]:
         run_id = f"inc_{uuid.uuid4().hex[:8]}"
         logs: List[str] = []
@@ -227,12 +241,6 @@ class MultiAgentIncidentOrchestrator:
             f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
         )
 
-        call_receipt = None
-        if auto_approve_hitl:
-            call_receipt = self.approve_and_dispatch_hitl(draft_id, approver="auto_demo_official", language=language)
-            nodes_status["CommsAgent"] = "DISPATCHED"
-            logs.append(f"[CommsAgent] HITL Approved -> Dispatched {language.upper()} Voice Call to +917678656930!")
-
         return {
             "run_id": run_id,
             "location": location,
@@ -255,7 +263,6 @@ class MultiAgentIncidentOrchestrator:
             "situation_report": report_text,
             "cap_alert": cap_payload,
             "hitl_draft_id": draft_id,
-            "call_receipt": call_receipt,
         }
 
     def _save_hitl_draft(
@@ -298,7 +305,7 @@ class MultiAgentIncidentOrchestrator:
                     cap_payload["script_hi"],
                     cap_payload["script_en"],
                     cap_payload["xml"],
-                    "PENDING_OFFICIAL_APPROVAL",
+                    HITL_PENDING,
                     time.time(),
                 ),
             )
@@ -323,47 +330,46 @@ class MultiAgentIncidentOrchestrator:
     @staticmethod
     def approve_and_dispatch_hitl(
         draft_id: str,
-        approver: str = "official",
-        language: str = "hi",
-        target_phone: str = "+917678656930",
+        approved_by: str,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Moves a pending draft to approved exactly once, then dispatches it. Raises HitlDraftNotFound / HitlDraftNotPending."""
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.close()
-            # Fallback if ad-hoc approval requested
-            res = execute_mcp_tool(
-                "dispatch_approved_alert",
-                {"phone_number": target_phone, "location": "Patna Flood Sector", "severity": "CRITICAL", "language": language},
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise HitlDraftNotFound(draft_id)
+            approved_at = time.time()
+            cur.execute(
+                "UPDATE hitl_approvals SET status = ?, approved_by = ?, approved_at = ? WHERE draft_id = ? AND status = ?",
+                (HITL_APPROVED, approved_by, approved_at, draft_id, HITL_PENDING),
             )
-            return res["data"]
+            if cur.rowcount != 1:
+                raise HitlDraftNotPending(draft_id, row["status"])
+            conn.commit()
+        finally:
+            conn.close()
 
-        draft = dict(row)
-        use_lang = language or draft.get("language", "hi")
+        draft = {**dict(row), "status": HITL_APPROVED, "approved_by": approved_by, "approved_at": approved_at}
         res = execute_mcp_tool(
             "dispatch_approved_alert",
             {
-                "phone_number": target_phone or draft.get("target_phone", "+917678656930"),
+                "phone_number": draft["target_phone"],
                 "location": draft["location"],
                 "severity": draft["severity"],
-                "language": use_lang,
-                "max_depth_m": draft.get("max_depth_m", 0.72),
+                "language": language or draft["language"],
+                "max_depth_m": draft["max_depth_m"],
             },
         )
-        cur.execute(
-            "UPDATE hitl_approvals SET status = 'APPROVED_AND_DISPATCHED', approved_by = ?, approved_at = ? WHERE draft_id = ?",
-            (approver, time.time(), draft_id),
-        )
-        conn.commit()
-        conn.close()
         return {
             "draft_id": draft_id,
-            "status": "APPROVED_AND_DISPATCHED",
-            "approved_by": approver,
+            "status": HITL_APPROVED,
+            "approved_by": approved_by,
             "dispatch_receipt": res["data"],
+            "draft": draft,
         }
 
 

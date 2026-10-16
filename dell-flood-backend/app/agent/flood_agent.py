@@ -60,17 +60,18 @@ class FloodAgent:
         phones=None,
         language="hi",
         report_format="NDMA",
-        auto_approve_hitl=False,
-        require_hitl_for_calls=None,
+        require_hitl_for_calls=True,
+        requested_by=None,
         **kwargs,
     ):
         """
         Autonomous FloodAgent + 6-Agent LangGraph Supervisor Cycle (Solves P7, P17, P20, P21, P27, P28).
         Uses a run-scoped cycle_logs list so concurrent invocations never leak across users.
+        With require_hitl_for_calls=False the draft is approved immediately on behalf of requested_by.
         """
+        if not require_hitl_for_calls and not requested_by:
+            raise ValueError("Skipping the HITL queue needs the requesting official as requested_by.")
         target_phones = phones or phone_numbers or ["+917678656930"]
-        if require_hitl_for_calls is not None:
-            auto_approve_hitl = not bool(require_hitl_for_calls)
         cycle_logs = []
         cycle_start_t = time.time()
 
@@ -88,10 +89,16 @@ class FloodAgent:
             lon=lon,
             language=language,
             report_format=report_format,
-            auto_approve_hitl=auto_approve_hitl,
         )
         for olog in orch_res.get("logs", []):
             rlog(olog)
+
+        voice_dispatched = {}
+        draft_id = orch_res.get("hitl_draft_id")
+        if not require_hitl_for_calls and draft_id:
+            voice_dispatched = self.approve_hitl_action(draft_id, approved_by=requested_by, language=language)
+            orch_res["agent_nodes_status"]["CommsAgent"] = "DISPATCHED"
+            rlog(f"[CommsAgent] HITL draft {draft_id} approved at request time by {requested_by} -> {voice_dispatched['status']}")
 
         rain_details = check_rainfall_detailed(lat, lon)
         rainfall_5day = rain_details["total_window_rain_mm"]
@@ -142,19 +149,6 @@ class FloodAgent:
             rlog(f"  [AWS Polly] Neural Voice synthesized ({polly_info.get('voice_id')}, {tts_lang}): {polly_info.get('s3_key')}")
         except Exception as polly_err:
             rlog(f"  [WARN] Polly synthesis notice: {polly_err}")
-
-        # Broadcast Emergency Alert via Amazon SNS
-        sns_info = {}
-        try:
-            sns_info = sns_service.broadcast_flood_warning(
-                location=location,
-                severity_level=severity,
-                water_depth_m=peak_depth_m,
-                evacuation_url=s3_report_info.get("cloud_url_preview", "http://localhost:8081"),
-            )
-            rlog(f"  [AWS SNS] Emergency Topic broadcast dispatched: MessageID={sns_info.get('message_id')}")
-        except Exception as sns_err:
-            rlog(f"  [WARN] SNS broadcast notice: {sns_err}")
 
         # Emit Telemetry Metrics to Amazon CloudWatch
         cw_info = {}
@@ -211,14 +205,15 @@ class FloodAgent:
             "mcp_provenance": orch_res.get("mcp_provenance", []),
             "mcp_audit_log": orch_res.get("mcp_provenance", []),
             "cap_alert": orch_res.get("cap_alert", {}),
-            "hitl_draft_id": orch_res.get("hitl_draft_id"),
+            "hitl_draft_id": draft_id,
             "hitl_pending": hitl_pending,
+            "voice_dispatched": voice_dispatched,
             "evacuation": orch_res.get("evacuation", {}),
             "urnn": urnn_data,
             "target_phones": target_phones,
             "aws_cloud": {
                 "s3_report": s3_report_info,
-                "sns_broadcast": sns_info,
+                "sns_broadcast": voice_dispatched.get("aws_dispatch", {}).get("sns", {}),
                 "polly_audio": polly_info,
                 "cloudwatch_telemetry": cw_info,
             },
@@ -248,13 +243,13 @@ class FloodAgent:
             })
         return formatted
 
-    def approve_hitl_action(self, item_id: str, language: str = "hi"):
+    def approve_hitl_action(self, item_id: str, approved_by: str, language: str = "hi"):
         """Approves a pending HITL draft and dispatches CAP Voice + AWS SNS + AWS Polly."""
-        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, language=language)
-        loc = res.get("draft", {}).get("location", "Patna, Bihar")
-        sev = res.get("draft", {}).get("severity", "CRITICAL")
+        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, approved_by=approved_by, language=language)
+        loc = res["draft"]["location"]
+        sev = res["draft"]["severity"]
         try:
-            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=0.82)
+            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=res["draft"]["max_depth_m"])
             polly_res = polly_service.synthesize_emergency_alert(
                 f"HITL Approved Emergency Alert for {loc}. Severity: {sev}.",
                 language="hi-IN" if str(language).lower().startswith("hi") else "en-IN",
