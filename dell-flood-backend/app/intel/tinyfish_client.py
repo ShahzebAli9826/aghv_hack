@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -24,6 +25,7 @@ log = logging.getLogger("aegis.intel.tinyfish")
 
 TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
 TERMINAL_RESEARCH_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"})
+SLOT_WAIT_S = 0.2
 
 
 # --- errors ---
@@ -253,8 +255,9 @@ def _normalize_monitor(body: dict) -> Monitor:
 # --- cost ---
 
 class CostLedger:
-    """Per-request budget. Steps are reserved before a run starts, so concurrent
-    runs can never overspend; the reservation is settled with the real step count."""
+    """Per-request budget. Steps are reserved before a run starts and each run is capped
+    at its reservation; settling records the real step count, so a run that exceeds
+    its cap still counts in full and marks the ledger over budget."""
 
     def __init__(self, max_usd: float, usd_per_step: float):
         self.max_usd = max_usd
@@ -266,11 +269,8 @@ class CostLedger:
 
     def reserve(self, wanted_steps: int) -> int:
         with self._lock:
-            if self.usd_per_step <= 0:
-                steps = wanted_steps
-            else:
-                committed = (self._spent_steps + self._reserved_steps) * self.usd_per_step
-                steps = min(wanted_steps, math.floor((self.max_usd - committed) / self.usd_per_step + 1e-9))
+            committed = (self._spent_steps + self._reserved_steps) * self.usd_per_step
+            steps = min(wanted_steps, math.floor((self.max_usd - committed) / self.usd_per_step + 1e-9))
             if steps < 1:
                 raise BudgetExceeded(f"budget of ${self.max_usd:.2f} for this request is exhausted")
             self._reserved_steps += steps
@@ -281,11 +281,15 @@ class CostLedger:
             self._reserved_steps -= reserved
             if actual is None:
                 self._unknown_steps = True
-            self._spent_steps += reserved if actual is None else min(actual, reserved)
+            self._spent_steps += reserved if actual is None else actual
 
     @property
     def steps(self) -> int:
         return self._spent_steps
+
+    @property
+    def over_budget(self) -> bool:
+        return self._spent_steps * self.usd_per_step > self.max_usd + 1e-9
 
     @property
     def spent_usd(self) -> float:
@@ -358,12 +362,12 @@ class TinyFishClient:
         return str(body["run_id"])
 
     def get_run(self, run_id: str) -> AgentRun:
-        body = self._request("GET", f"{self._settings.agent_base_url}/v1/runs/{run_id}",
+        body = self._request("GET", f"{self._settings.agent_base_url}/v1/runs/{_seg(run_id)}",
                              params={"screenshots": "none", "html": "none"})
         return _normalize_run(body)
 
     def cancel_run(self, run_id: str) -> str:
-        body = self._request("POST", f"{self._settings.agent_base_url}/v1/runs/{run_id}/cancel")
+        body = self._request("POST", f"{self._settings.agent_base_url}/v1/runs/{_seg(run_id)}/cancel")
         return str(body.get("status") or "")
 
     def stream_agent_run(self, url: str, goal: str, output_schema: dict | None = None, *,
@@ -407,7 +411,10 @@ class TinyFishClient:
         cancel_event: threading.Event | None = None,
     ) -> AgentRun:
         """Run one agent task to a terminal state while holding one concurrency slot."""
-        with self._agent_slots:
+        while not self._agent_slots.acquire(timeout=SLOT_WAIT_S):
+            if cancel_event is not None and cancel_event.is_set():
+                raise TinyFishCancelled("cancelled before start")
+        try:
             if cancel_event is not None and cancel_event.is_set():
                 raise TinyFishCancelled("cancelled before start")
             steps = ledger.reserve(self._settings.max_steps_per_run)
@@ -426,7 +433,6 @@ class TinyFishClient:
                         if event.type == "COMPLETE":
                             break
                         if cancel_event is not None and cancel_event.is_set() and run_id:
-                            self.cancel_run(run_id)
                             raise TinyFishCancelled("cancelled", run_id=run_id)
                     if not run_id:
                         raise TinyFishServerError("run-sse stream ended without a run_id")
@@ -436,8 +442,21 @@ class TinyFishClient:
                         on_started(run_id)
                 run = self._poll(run_id, cancel_event)
                 return run
+            except BaseException:
+                if run_id is not None and run is None:
+                    self._cancel_quietly(run_id)
+                raise
             finally:
                 ledger.settle(steps, run.num_of_steps if run is not None else None)
+        finally:
+            self._agent_slots.release()
+
+    def _cancel_quietly(self, run_id: str) -> None:
+        """Stop a remote run we are abandoning, so it stops billing and a retry is not a second live run."""
+        try:
+            self.cancel_run(run_id)
+        except TinyFishError as exc:
+            log.warning("tinyfish cancel of an abandoned run failed: %s", type(exc).__name__)
 
     def _poll(self, run_id: str, cancel_event: threading.Event | None) -> AgentRun:
         deadline = self._clock() + self._settings.run_timeout_s
@@ -446,10 +465,8 @@ class TinyFishClient:
             if run.terminal:
                 return run
             if cancel_event is not None and cancel_event.is_set():
-                self.cancel_run(run_id)
                 raise TinyFishCancelled("cancelled", run_id=run_id)
             if self._clock() >= deadline:
-                self.cancel_run(run_id)
                 raise TinyFishTimeout(f"run exceeded {self._settings.run_timeout_s:.0f}s", run_id=run_id)
             self._sleep(self._settings.poll_interval_s)
 
@@ -489,7 +506,7 @@ class TinyFishClient:
 
     def get_research(self, research_run_id: str) -> ResearchRun:
         return _normalize_research(
-            self._request("GET", f"{self._settings.agent_base_url}/v1/research-run/{research_run_id}"))
+            self._request("GET", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_run_id)}"))
 
     def run_research(self, query: str, *, domains: tuple[str, ...], recency_minutes: int | None = None,
                      cancel_event: threading.Event | None = None) -> ResearchRun:
@@ -500,7 +517,7 @@ class TinyFishClient:
             if run.terminal:
                 return run
             if (cancel_event is not None and cancel_event.is_set()) or self._clock() >= deadline:
-                self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{research_id}/cancel")
+                self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_id)}/cancel")
                 if cancel_event is not None and cancel_event.is_set():
                     raise TinyFishCancelled("cancelled", run_id=research_id)
                 raise TinyFishTimeout("research run timed out", run_id=research_id)
@@ -525,15 +542,20 @@ class TinyFishClient:
         return [_normalize_monitor(m) for m in body.get("monitors") or [] if isinstance(m, dict)]
 
     def get_monitor(self, monitor_id: str) -> Monitor:
-        return _normalize_monitor(self._request("GET", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}"))
+        return _normalize_monitor(self._request("GET", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}"))
 
     def delete_monitor(self, monitor_id: str) -> bool:
-        body = self._request("DELETE", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}")
+        body = self._request("DELETE", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}")
         return bool(body.get("deleted"))
 
     def trigger_monitor(self, monitor_id: str) -> dict:
-        body = self._request("POST", f"{self._settings.agent_base_url}/v1/monitors/{monitor_id}/runs")
+        body = self._request("POST", f"{self._settings.agent_base_url}/v1/monitors/{_seg(monitor_id)}/runs")
         return body.get("run") if isinstance(body.get("run"), dict) else {}
+
+
+def _seg(value: str) -> str:
+    """One URL path segment: ids come from webhooks and remote bodies, so '/' and '..' must not escape it."""
+    return quote(value, safe="")
 
 
 def _retry_after_header(response: httpx.Response) -> float | None:

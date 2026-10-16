@@ -475,6 +475,9 @@ def merge_evidence(outcomes: list[TaskOutcome]) -> tuple[list[Evidence], list[Co
     return items, detect_conflicts(items)
 
 
+NO_EVIDENCE = "No current official evidence was found. "
+
+
 def summarize(evidence: list[Evidence], conflicts: list[Conflict], failed: list[FailedSource]) -> str:
     counts = {g: sum(1 for e in evidence if e.grade is g) for g in Grade}
     parts = [
@@ -484,7 +487,7 @@ def summarize(evidence: list[Evidence], conflicts: list[Conflict], failed: list[
         f"{counts[Grade.insufficient]} insufficient",
     ]
     text = f"{len(evidence)} evidence items ({', '.join(parts)}); {len(conflicts)} conflicts; {len(failed)} sources failed."
-    return text + " For human review only."
+    return (NO_EVIDENCE if not evidence else "") + text + " For human review only."
 
 
 @dataclass
@@ -535,7 +538,11 @@ def compose(handle: _Handle, *, state: RunState, mock: bool, finished_at: dateti
         data_quality.append("conflicts_present")
     if any(e.validation_status.value == "rejected" for e in evidence):
         data_quality.append("rejected_items_present")
+    if not evidence and state not in (RunState.queued, RunState.running):
+        data_quality.append("insufficient_evidence")
     ledger = handle.ledger
+    if ledger is not None and not mock and ledger.over_budget:
+        data_quality.append("over_budget")
     live_view = handle.live_view if state is RunState.running else None
     return handle.run.model_copy(update={
         "state": state,
@@ -554,7 +561,7 @@ def compose(handle: _Handle, *, state: RunState, mock: bool, finished_at: dateti
             run_statuses={k: v for m in metas for k, v in m.run_statuses.items()},
             result_statuses={k: v for m in metas for k, v in m.result_statuses.items()},
             num_of_steps=sum(m.steps for m in metas) if metas else None,
-            estimated_cost_usd=ledger.spent_usd if ledger and not mock else (0.0 if mock else None),
+            estimated_cost_usd=ledger.spent_usd if ledger and not mock else None,
             budget_usd=ledger.max_usd if ledger else None,
         ),
         "live_view": live_view,
@@ -568,7 +575,9 @@ def terminal_state(handle: _Handle) -> RunState:
     failures = len(handle.skipped) + sum(1 for o in handle.outcomes if o.failure is not None)
     if succeeded == 0:
         return RunState.failed
-    return RunState.partial if failures else RunState.succeeded
+    if failures or not any(o.evidence for o in handle.outcomes):
+        return RunState.partial
+    return RunState.succeeded
 
 
 # --- runner ---
@@ -620,15 +629,25 @@ class IntelRunner:
             self.store.save_run(run)
             return run
         with self._lock:
-            existing_id = self._inflight.get(request.key)
-            if existing_id and existing_id in self._active:
-                return self.snapshot(self._active[existing_id])
+            existing = self._active.get(self._inflight.get(request.key, ""))
+            if existing is not None and not existing.cancel_event.is_set():
+                return self.snapshot(existing)
             handle = _Handle(run=base, request=request)
             self._active[base.run_id] = handle
             self._inflight[request.key] = base.run_id
-        self.store.save_run(base, request.key)
-        self._run_pool.submit(self._execute, handle)
+        try:
+            self.store.save_run(base, request.key)
+            self._run_pool.submit(self._execute, handle)
+        except BaseException:
+            self._release(handle)
+            raise
         return base
+
+    def _release(self, handle: _Handle) -> None:
+        with self._lock:
+            self._active.pop(handle.run.run_id, None)
+            if self._inflight.get(handle.request.key) == handle.run.run_id:
+                del self._inflight[handle.request.key]
 
     def snapshot(self, handle: _Handle) -> WebIntelRun:
         with handle.lock:
@@ -654,10 +673,11 @@ class IntelRunner:
             handle.done.wait(timeout)
         return self.get(run_id)
 
-    def _set_live_view(self, handle: _Handle, url: str, tinyfish_run_id: str | None) -> None:
+    def _set_live_view(self, handle: _Handle, task: SourceTask, url: str, tinyfish_run_id: str | None) -> None:
         with handle.lock:
             handle.live_view = LiveView(streaming_url=url, expires_at=self._now() + LIVE_VIEW_TTL,
-                                        tinyfish_run_id=tinyfish_run_id)
+                                        tinyfish_run_id=tinyfish_run_id, source_id=task.source.id,
+                                        product_id=task.product.id)
 
     def _save(self, handle: _Handle) -> None:
         self.store.save_run(self.snapshot(handle), handle.request.key)
@@ -682,7 +702,7 @@ class IntelRunner:
                 ctx = ExecCtx(
                     gateway=self.gateway, settings=self.settings, location=request.location, inputs=inputs,
                     ledger=handle.ledger, cancel_event=handle.cancel_event,
-                    on_streaming_url=lambda url, rid, h=handle: self._set_live_view(h, url, rid),
+                    on_streaming_url=lambda url, rid, h=handle, t=task: self._set_live_view(h, t, url, rid),
                     sleep=self._sleep, meta=TaskMeta(), webhook_url=self._webhook_url(),
                 )
                 futures.append(self._task_pool.submit(self._run_one, handle, index, task, ctx))
@@ -696,6 +716,7 @@ class IntelRunner:
                 handle.live_view = None
         except Exception as exc:  # noqa: BLE001 - a run must always reach a terminal state
             log.exception("web-intel run %s crashed", handle.run.run_id)
+            handle.cancel_event.set()
             with handle.lock:
                 handle.run = handle.run.model_copy(update={
                     "state": RunState.failed, "finished_at": self._now(),
@@ -703,12 +724,27 @@ class IntelRunner:
                 })
                 handle.live_view = None
         finally:
-            self._save(handle)
-            with self._lock:
-                self._active.pop(handle.run.run_id, None)
-                if self._inflight.get(request.key) == handle.run.run_id:
-                    del self._inflight[request.key]
-            handle.done.set()
+            try:
+                self._save_final(handle)
+            finally:
+                self._release(handle)
+                handle.done.set()
+
+    def _save_final(self, handle: _Handle) -> None:
+        try:
+            run = self.snapshot(handle)
+        except Exception:  # noqa: BLE001 - compose failed; store what is known without it
+            log.exception("web-intel run %s could not be composed", handle.run.run_id)
+            with handle.lock:
+                handle.run = handle.run.model_copy(update={
+                    "state": RunState.failed, "finished_at": handle.run.finished_at or self._now(),
+                    "error": handle.run.error or "internal error: could not compose the run",
+                })
+                run = handle.run
+        try:
+            self.store.save_run(run, handle.request.key)
+        except Exception:  # noqa: BLE001 - the run must still be released below
+            log.exception("web-intel run %s could not be saved", run.run_id)
 
     def shutdown(self) -> None:
         self._run_pool.shutdown(wait=False, cancel_futures=True)

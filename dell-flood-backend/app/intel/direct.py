@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from app.intel.sources import Resolver, default_resolver, url_rejection
+from app.intel.sources import Resolver, default_resolver, is_public_ip, url_rejection
 
 MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 3
@@ -15,6 +15,22 @@ class DirectFetchError(Exception):
     def __init__(self, message: str, *, timeout: bool = False):
         super().__init__(message)
         self.timeout = timeout
+
+
+def peer_rejection(response: httpx.Response) -> str | None:
+    """Why the address this response actually came from is unsafe, or None.
+
+    url_rejection resolves DNS before connecting; the name can re-resolve to a
+    private address by connect time, so the connected peer is checked as well.
+    """
+    stream = response.extensions.get("network_stream")
+    peer = stream.get_extra_info("server_addr") if stream is not None else None
+    if not peer:
+        return "unverifiable"
+    try:
+        return None if is_public_ip(str(peer[0])) else "private_address"
+    except ValueError:
+        return "unverifiable"
 
 
 def safe_get(
@@ -30,12 +46,19 @@ def safe_get(
     Returns (final_url, text). Raises DirectFetchError on any rejection or failure.
     """
     current = url
+    origin = httpx.URL(url).host
     for _ in range(MAX_REDIRECTS + 1):
         problem = url_rejection(current, domains, resolver)
         if problem:
             raise DirectFetchError(f"url rejected: {problem}")
+        hop = httpx.URL(current)
+        credentialed = hop.scheme == "https" and hop.host == origin
         try:
-            with http.stream("GET", current, headers=headers, follow_redirects=False) as response:
+            with http.stream("GET", current, headers=headers if credentialed else None,
+                             follow_redirects=False) as response:
+                peer_problem = peer_rejection(response)
+                if peer_problem:
+                    raise DirectFetchError(f"peer rejected: {peer_problem}")
                 if response.is_redirect:
                     location = response.headers.get("Location")
                     if not location:

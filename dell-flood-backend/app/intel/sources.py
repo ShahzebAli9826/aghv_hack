@@ -79,6 +79,12 @@ class Source:
     def in_season(self, day: date) -> bool:
         return self.season is None or self.season.contains(day)
 
+    @property
+    def monitorable(self) -> bool:
+        """A Page monitor fetches start_url without a browser agent or our own API keys."""
+        return (self.start_url is not None and self.requires_setting is None
+                and self.access in (AccessMethod.fetch, AccessMethod.rss))
+
 
 def _src(**kw) -> Source:
     kw["jurisdictions"] = frozenset(kw["jurisdictions"])
@@ -242,7 +248,7 @@ def default_resolver(host: str) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
-def _is_public_ip(raw: str) -> bool:
+def is_public_ip(raw: str) -> bool:
     ip = ipaddress.ip_address(raw.split("%", 1)[0])
     return not (
         ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
@@ -283,7 +289,7 @@ def url_rejection(url: str, domains: Iterable[str], resolver: Resolver | None = 
             return "dns_failure"
         if not addresses:
             return "dns_failure"
-        if not all(_is_public_ip(a) for a in addresses):
+        if not all(is_public_ip(a) for a in addresses):
             return "private_address"
     return None
 
