@@ -905,41 +905,47 @@ def build_cap_v12_alert(
 
 def run_stdio_mcp_server():
     """Standard JSON-RPC 2.0 stdio transport for external MCP hosts (Claude Desktop / Cursor)."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-            req_id = msg.get("id")
-            method = msg.get("method")
-            params = msg.get("params", {})
+    protocol_out = sys.stdout
+    # Tools and services print() diagnostics; stdout must carry nothing but JSON-RPC frames.
+    sys.stdout = sys.stderr
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                req_id = msg.get("id")
+                method = msg.get("method")
+                params = msg.get("params", {})
 
-            if method == "initialize":
-                res = {
-                    "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
-                    "capabilities": {"tools": {}},
-                }
-            elif method == "tools/list":
-                res = {"tools": MCP_TOOLS_REGISTRY}
-            elif method == "tools/call":
-                t_name = params.get("name")
-                t_args = params.get("arguments", {})
-                if t_name in HITL_ONLY_TOOLS:
-                    raise PermissionError(HITL_ONLY_REFUSAL)
-                out = execute_mcp_tool(t_name, t_args)
-                res = {"content": [{"type": "text", "text": json.dumps(out)}]}
-            else:
-                res = {"status": "ok"}
+                if method == "initialize":
+                    res = {
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
+                        "capabilities": {"tools": {}},
+                    }
+                elif method == "tools/list":
+                    res = {"tools": MCP_TOOLS_REGISTRY}
+                elif method == "tools/call":
+                    t_name = params.get("name")
+                    t_args = params.get("arguments", {})
+                    if t_name in HITL_ONLY_TOOLS:
+                        raise PermissionError(HITL_ONLY_REFUSAL)
+                    out = execute_mcp_tool(t_name, t_args)
+                    res = {"content": [{"type": "text", "text": json.dumps(out)}]}
+                else:
+                    res = {"status": "ok"}
 
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
-            sys.stdout.flush()
-        except Exception as exc:
-            sys.stdout.write(
-                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
-            )
-            sys.stdout.flush()
+                protocol_out.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
+                protocol_out.flush()
+            except Exception as exc:
+                protocol_out.write(
+                    json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
+                )
+                protocol_out.flush()
+    finally:
+        sys.stdout = protocol_out
 
 
 if __name__ == "__main__":

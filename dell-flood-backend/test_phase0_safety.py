@@ -1,5 +1,7 @@
+import io
 import os
 import sys
+import json
 import socket
 import tempfile
 
@@ -381,12 +383,42 @@ def test_agent_cycle_response_has_no_invented_numbers():
     assert res["validation"]["grounding_passed"] is True
 
 
+def test_stdio_mcp_keeps_stdout_for_json_rpc():
+    from app.mcp import aegis_mcp_server
+
+    frames_in = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "get_rainfall_telemetry", "arguments": {"lat": 1.2345, "lon": 5.6789}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "dispatch_approved_alert", "arguments": {"phone_number": "+15555550123", "location": "Patna", "severity": "CRITICAL"}}},
+    ]
+    stdin = io.StringIO("".join(json.dumps(f) + "\n" for f in frames_in))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    saved = (sys.stdin, sys.stdout, sys.stderr)
+    sys.stdin, sys.stdout, sys.stderr = stdin, stdout, stderr
+    try:
+        aegis_mcp_server.run_stdio_mcp_server()
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = saved
+    frames_out = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert [f.get("id") for f in frames_out] == [1, 2, None]
+    assert json.loads(frames_out[1]["result"]["content"][0]["text"])["data"]["antecedent_rain_5d_mm"] == 0.0
+    assert frames_out[2]["error"]["message"] == "dispatch tools run only through HITL approval"
+    assert "[Rainfall Detailed] Open-Meteo error" in stderr.getvalue()
+
+
 def test_cors_default_has_no_wildcard():
     res = client.options(
         "/api/hitl/queue",
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in res.headers
+    allowed = client.options(
+        "/api/hitl/queue",
+        headers={"Origin": "http://localhost:8081", "Access-Control-Request-Method": "GET"},
+    )
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:8081"
 
 
 if __name__ == "__main__":
