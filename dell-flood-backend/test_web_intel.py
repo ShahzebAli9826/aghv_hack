@@ -712,6 +712,21 @@ def test_restart_marks_inflight_runs_interrupted():
     assert [(f.source_id, f.reason.value) for f in run.failed_sources] == [("aegis_runner", "interrupted")]
 
 
+def test_latest_for_district_respects_state():
+    store = IntelStore(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
+    now = datetime.now(timezone.utc)
+    for run_id, code, state, age in (("wi_mh", "IN-MH", "Maharashtra", 2), ("wi_br", "IN-BR", "Bihar", 1)):
+        loc = LocationQuery(query="Aurangabad", latitude=20.0, longitude=75.0, jurisdiction=code, state=state,
+                            district="Aurangabad")
+        store.save_run(WebIntelRun(run_id=run_id, state=RunState.succeeded, mode="live",
+                                   products=[ProductId.river_levels], location=loc,
+                                   created_at=now - timedelta(minutes=age)))
+    assert store.latest_for(district="Aurangabad", state="IN-MH").run_id == "wi_mh"
+    assert store.latest_for(district="Aurangabad", state="IN-BR").run_id == "wi_br"
+    assert store.latest_for(district="Aurangabad", state="IN-UP") is None
+    assert store.latest_for(district="Aurangabad").run_id == "wi_br"
+
+
 # --- secrets ---
 
 def test_api_key_never_appears_in_responses_logs_or_rows():

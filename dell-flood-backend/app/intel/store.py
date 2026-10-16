@@ -137,12 +137,13 @@ class IntelStore:
         if not include_stale:
             clauses.append("created_at >= ?")
             params.append(_utc(datetime.now(timezone.utc) - max_age))
-        if district:
-            clauses.append("district = ?")
-            params.append(district.strip().lower())
-        elif state:
-            clauses.append("state = ?")
-            params.append(state)
+        if district or state:
+            if district:
+                clauses.append("district = ?")
+                params.append(district.strip().lower())
+            if state:
+                clauses.append("state = ?")
+                params.append(state)
         elif lat is not None and lon is not None:
             clauses.append("ABS(lat - ?) <= 0.5 AND ABS(lon - ?) <= 0.5")
             params.extend([lat, lon])
