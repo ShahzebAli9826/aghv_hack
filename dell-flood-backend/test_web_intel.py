@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -460,9 +461,23 @@ def test_prompt_injection_yields_only_escaped_bounded_excerpt():
     assert goals and all("IGNORE PREVIOUS" not in g for g in goals)
     hosts = {httpx.URL(r["url"]).host for r in fake.requests}
     assert hosts == {"agent.tinyfish.ai", "api.fetch.tinyfish.ai"}
-    for name in ("twilio", "app.agent.tools", "app.aws.sns_service", "app.aws.polly_service",
-                 "app.agent.incident_orchestrator"):
-        assert name not in sys.modules, name
+
+
+DISPATCH_MODULES = ("twilio", "app.agent.tools", "app.aws.sns_service", "app.aws.polly_service",
+                    "app.agent.incident_orchestrator")
+
+
+def test_importing_intel_loads_no_dispatch_modules():
+    """Runs in a fresh interpreter: other test files in this process may already have imported main.py."""
+    modules = sorted(f"app.intel.{p.stem}" for p in INTEL_DIR.glob("*.py") if p.stem != "__init__")
+    script = (f"import importlib, json, sys; sys.path.insert(0, {str(INTEL_DIR.parent.parent)!r})\n"
+              f"for m in {modules!r}: importlib.import_module(m)\n"
+              f"print(json.dumps(sorted(n for n in {DISPATCH_MODULES!r} if n in sys.modules)))")
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60,
+                          cwd=str(INTEL_DIR.parent.parent))
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert json.loads(done.stdout.strip().splitlines()[-1]) == []
+    assert "app.intel.runner" in modules
 
 
 FORBIDDEN = {"send_sms_alert", "trigger_voice_call", "send_smtp_email", "sns_service", "polly_service",
