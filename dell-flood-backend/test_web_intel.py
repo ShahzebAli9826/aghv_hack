@@ -25,7 +25,7 @@ from app.api.auth_deps import require_official  # noqa: E402
 from app.intel.config import Mode, load_settings  # noqa: E402
 from app.intel.direct import DirectFetchError, safe_get  # noqa: E402
 from app.intel.evidence import (  # noqa: E402
-    AccessMethod, Evidence, EvidenceCategory, FailureReason, Freshness, Grade, LocationMatch, LocationQuery,
+    AccessMethod, Evidence, EvidenceCategory, FailureReason, Freshness, Grade, LocationQuery,
     Measurement, ProductId, RunState, Signal, SourceType, ValidationStatus, WebIntelRun,
 )
 from app.intel.products import PRODUCTS  # noqa: E402

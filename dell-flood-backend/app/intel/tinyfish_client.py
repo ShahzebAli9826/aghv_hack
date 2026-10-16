@@ -322,7 +322,7 @@ class TinyFishClient:
         log.debug("tinyfish %s %s", method, httpx.URL(url).path)
         try:
             response = self._http.request(method, url, json=json_body, params=params, headers=self._headers())
-        except httpx.TimeoutException as exc:
+        except httpx.TimeoutException:
             raise TinyFishTimeout(f"{method} {httpx.URL(url).path} timed out", retryable=True) from None
         except httpx.TransportError as exc:
             raise TinyFishServerError(f"transport error: {type(exc).__name__}", retryable=True) from None
