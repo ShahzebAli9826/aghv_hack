@@ -28,13 +28,14 @@ python -m app.mcp.aegis_mcp_server                               # stdio MCP ser
 Tests are plain scripts, not a pytest suite. Each has a `__main__` block, and the functions are named `test_*`, so pytest can also collect them:
 
 ```bash
+python -m pytest test_phase0_safety.py test_web_intel.py test_intel_wiring.py -q   # offline safety + web-intel suites; run together in one process
 python test_backend.py                 # ML inference / post-processing / RAG smoke checks
 python test_aws_mcp_free_tier.py       # MCP registry + AWS diagnostic suite + stdio MCP
 python verify_endpoints.py             # needs the server already running on localhost:8000
 python -m pytest test_backend.py::test_post_processing   # run a single function
 ```
 
-Warning: `test_aws_mcp_free_tier.py` runs `aws_run_free_tier_diagnostic_suite`. With real AWS credentials in `.env`, that sends a real SNS broadcast and provisions resources.
+The three offline suites block non-loopback sockets, blank every credential, and keep their SQLite files in a temp dir. The diagnostic suite now runs SNS, SQS, Step Functions and the provisioner as dry runs; other sub-tools (S3 upload, DynamoDB writes) still hit AWS when real credentials are set.
 
 Frontend (run from `dell-flood-app/`):
 
@@ -51,11 +52,11 @@ The app finds the backend through `EXPO_PUBLIC_API_URL`. On web, `src/services/a
 
 ## Backend architecture
 
-- **Entry:** `main.py` mounts `app/api/endpoints.py` (`router`, prefix `/api`) and `app/mcp/aegis_mcp_server.py` (`mcp_router`).
+- **Entry:** `main.py` mounts `app/api/endpoints.py` (`router`, prefix `/api`), `app/mcp/aegis_mcp_server.py` (`mcp_router`) and `app/intel/routes.py` (`intel_router`, `/api/agent/web-intelligence`). Startup fails web-intel runs a previous process left queued/running.
 - **Import-time side effects:** importing `endpoints.py` creates the SQLite tables and seed users/shelters (`init_db()`), loads the SegFormer singleton and the U-RNN, and builds `FloodAgent` and the RAG generator (ChromaDB + `corpus/`). Any script that imports it pays that cost.
 - **Two SQLite files:**
   - `flood_database.db`, relative to the working directory: users, complaints, shelters. Used by `endpoints.py`.
-  - `flood_app.db`, absolute path: the `hitl_approvals` table. Used by `agent/incident_orchestrator.py`.
+  - `flood_app.db` (backend dir, or `AEGIS_APP_DB`): `hitl_approvals` (orchestrator) and the `web_intel_*` tables (`app/intel/store.py`).
 
 ### There are two detection paths, and they don't share inputs
 
@@ -67,6 +68,15 @@ The app finds the backend through `EXPO_PUBLIC_API_URL`. On web, `src/services/a
    - A fixed, sequential set of "agent" steps. It is not a LangGraph graph despite the naming.
    - Every step goes through `execute_mcp_tool(name, args)` in `app/mcp/aegis_mcp_server.py`. That function is one large `if/elif` dispatcher, and it records a SHA-256 "provenance" entry for each call.
    - The MCP `run_flood_segmentation` tool uses `agent/tools.py::fetch_satellite`, which builds Esri basemap tiles plus synthetic SAR, **not** the Sentinel Hub path above. Keep this split in mind when changing either path.
+   - Node order: Monitor → WebEvidence → EOAnalyst → CrowdIntelligence → Logistics → Reporter → Comms. Escalation comes only from hydrology, segmentation area and verified crowd clusters.
+   - If segmentation raises (no weights ship, so it does by default), EOAnalystAgent is `FAILED`, area/depth/impact are `None`, the SITREP is skipped, and escalation runs on hydrology alone. Failures are listed in `degraded_nodes`.
+   - Shelters (`agent/shelters.py`) are never invented: relief camps from fresh web evidence, else registry rows within 50 km in `flood_database.db`, else `no_verified_shelters`. Routing and allocation use registry rows only.
+
+### Web intelligence (`app/intel/`, TinyFish)
+
+- Collects official flood evidence (CWC, IMD, SACHET, state bulletins, mobility, relief camps, news, helplines) as background runs. `TINYFISH_MODE` is `live`, `replay` (fixtures, every item `mock`) or `disabled`. Contract: `app/intel/TINYFISH_CONTRACT.md`, `app/intel/evidence.py`.
+- Evidence is advice for a human. `agent/web_evidence.py` is the read-only bridge: the WebEvidenceAgent node attaches the latest run (`ATTACHED` / `STALE` / `NONE_AVAILABLE` / `FAILED`) to the HITL draft (`evidence_json`, returned as `web_evidence`) and the cycle result (`web_intelligence`). It never starts a run and never changes escalation. It also feeds `reported_disruptions` (evacuation), `independent_reports` (crowd), verified helplines (CAP `instruction`/`web`/`contact`), active official alerts (HITL de-confliction), and an "Official sources (retrieved via TinyFish)" SITREP section appended after numeric grounding.
+- MCP read-tier tools `web_intel_start_run`, `web_intel_get_run`, `web_intel_latest_evidence` (`app/mcp/web_intel_tools.py`) add TinyFish run ids and cost to the provenance entry.
 
 ### Model and post-processing
 
@@ -79,11 +89,10 @@ The app finds the backend through `EXPO_PUBLIC_API_URL`. On web, `src/services/a
 ### Alerts, approval gate, and auth
 
 - Outbound channels: Twilio SMS/voice (`agent/tools.py`, TwiML built with `VoiceResponse`), SMTP (`send_smtp_email`, recipient forced to `ALERT_RECIPIENT_EMAIL`), Expo push, AWS SNS/Polly.
-- Human approval (HITL): the orchestrator saves a CAP v1.2 draft to `hitl_approvals`. `POST /api/hitl/approve` → `approve_and_dispatch_hitl` sends it. Alerts can still go out without approval:
-  - `AgentCycleRequest.require_hitl_for_calls` defaults to `False`, which auto-approves the call;
-  - `run_cycle` broadcasts on SNS unconditionally.
-- Auth helpers live in `app/api/auth_deps.py`: PBKDF2 hashing, an HS256 JWT, `require_official`, `escape_html`, `slugify_location`, `normalize_and_validate_phone`. `get_current_user` falls back to a demo official unless `STRICT_AUTH=true`, and **no route currently uses `require_official`**.
-- The frontend stores the token (`aegis_jwt_token` in AsyncStorage) but does not send it.
+- Human approval (HITL): the orchestrator saves a CAP v1.2 draft to `hitl_approvals`. `POST /api/hitl/approve` → `approve_and_dispatch_hitl` is the only path that sends voice + SNS + Polly. States: `PENDING_OFFICIAL_APPROVAL` → `APPROVED_DISPATCHING` (one atomic UPDATE) → `APPROVED_AND_DISPATCHED` | `APPROVED_NO_RECIPIENT` (sends nothing) | `DISPATCH_FAILED` (error stored, endpoint 502, a second approval retries). A lost race returns 409 with the winner's status.
+- Auth helpers live in `app/api/auth_deps.py`: PBKDF2 hashing, an HS256 JWT, `require_official` (role compared lowercase), `escape_html`, `slugify_location`, `normalize_and_validate_phone`. `STRICT_AUTH` defaults to `true`; only `STRICT_AUTH=false` restores the anonymous demo-official fallback. Alert, HITL, agent-cycle, MCP-execute, AWS-provision and web-intel routes require an official.
+- `/api/mcp/execute` refuses tools marked `requires_official_approval` (dispatch, SNS broadcast, provisioning, SQS/SSM writes).
+- The frontend sends the JWT (`aegis_jwt_token` in AsyncStorage) as `Authorization: Bearer`.
 
 ### AWS layer (`app/aws/`)
 
@@ -113,12 +122,11 @@ Backend keys in `dell-flood-backend/.env.example`:
 - `AWS_*`
 - `MODEL_WEIGHTS_PATH`, `CHROMA_DB_PATH`
 
+- `JWT_SECRET_KEY`, `AWS_COGNITO_FALLBACK_SECRET` (defaults to `JWT_SECRET_KEY`), `STRICT_AUTH`, `ALLOWED_ORIGINS`. Empty secrets mean a random per-process secret; with `WEB_CONCURRENCY`/`--workers` > 1 startup fails unless `JWT_SECRET_KEY` is set.
+- Web intelligence: `TINYFISH_MODE`, `TINYFISH_ENABLED`, `TINYFISH_API_KEY`, `TINYFISH_*` limits, `TINYFISH_WEBHOOK_TOKEN`, `TINYFISH_PUBLIC_BASE_URL`, `IMD_API_KEY`, `AEGIS_APP_DB`.
+
 Read by the code but missing from `.env.example`:
 - `SMTP_SENDER_EMAIL`, `SMTP_SENDER_PASSWORD`, `ALERT_RECIPIENT_EMAIL`
-- `JWT_SECRET_KEY` (only in the root `.env.example`)
-- `STRICT_AUTH`
-- `ALLOWED_ORIGINS` (default includes `*`)
-- `AWS_COGNITO_FALLBACK_SECRET`
 - `MIREYE_API_TOKEN`
 
 `CWC_API_KEY` and `SENDGRID_*` appear in the template but nothing reads them.
