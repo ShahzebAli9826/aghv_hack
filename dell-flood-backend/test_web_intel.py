@@ -735,7 +735,7 @@ def test_replay_mode_is_unmistakably_mock():
     assert run.mode == "replay"
     assert "mock_replay" in run.data_quality
     assert run.evidence and all(e.mock for e in run.evidence)
-    assert run.agent_metadata.estimated_cost_usd == 0.0
+    assert (run.agent_metadata.estimated_cost_usd, run.agent_metadata.budget_usd) == (None, 0.5)
     assert evidence_for_hitl(district="Siwan", service=service)["status"] == "ATTACHED"
     assert evidence_for_hitl(district="Gaya", service=service)["status"] == "NONE_AVAILABLE"
     assert all(item["mock"] for item in evidence_for_hitl(district="Siwan", service=service)["evidence"])

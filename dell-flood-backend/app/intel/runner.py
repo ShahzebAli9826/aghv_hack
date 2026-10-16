@@ -561,7 +561,7 @@ def compose(handle: _Handle, *, state: RunState, mock: bool, finished_at: dateti
             run_statuses={k: v for m in metas for k, v in m.run_statuses.items()},
             result_statuses={k: v for m in metas for k, v in m.result_statuses.items()},
             num_of_steps=sum(m.steps for m in metas) if metas else None,
-            estimated_cost_usd=ledger.spent_usd if ledger and not mock else (0.0 if mock else None),
+            estimated_cost_usd=ledger.spent_usd if ledger and not mock else None,
             budget_usd=ledger.max_usd if ledger else None,
         ),
         "live_view": live_view,
