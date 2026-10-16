@@ -24,6 +24,7 @@ log = logging.getLogger("aegis.intel.tinyfish")
 
 TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
 TERMINAL_RESEARCH_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"})
+SLOT_WAIT_S = 0.2
 
 
 # --- errors ---
@@ -407,7 +408,10 @@ class TinyFishClient:
         cancel_event: threading.Event | None = None,
     ) -> AgentRun:
         """Run one agent task to a terminal state while holding one concurrency slot."""
-        with self._agent_slots:
+        while not self._agent_slots.acquire(timeout=SLOT_WAIT_S):
+            if cancel_event is not None and cancel_event.is_set():
+                raise TinyFishCancelled("cancelled before start")
+        try:
             if cancel_event is not None and cancel_event.is_set():
                 raise TinyFishCancelled("cancelled before start")
             steps = ledger.reserve(self._settings.max_steps_per_run)
@@ -438,6 +442,8 @@ class TinyFishClient:
                 return run
             finally:
                 ledger.settle(steps, run.num_of_steps if run is not None else None)
+        finally:
+            self._agent_slots.release()
 
     def _poll(self, run_id: str, cancel_event: threading.Event | None) -> AgentRun:
         deadline = self._clock() + self._settings.run_timeout_s

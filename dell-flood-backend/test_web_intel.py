@@ -321,6 +321,45 @@ def test_third_agent_run_waits_while_two_are_in_flight():
     assert ledger.steps == 3
 
 
+def test_cancel_while_waiting_for_an_agent_slot():
+    release = threading.Event()
+
+    def get(request):
+        release.wait(5)
+        return httpx.Response(200, json=run_body({"status": "success"}, run_id="run_1", steps=1))
+
+    fake = FakeHTTP({**agent_routes({}, start_ids=["run_1"]), f"GET {AGENT}/v1/runs/run_1": get})
+    client = TinyFishClient(make_settings(max_concurrent_agent_runs=1), fake.client())
+    ledger = CostLedger(10.0, 0.016)
+    holder = threading.Thread(target=client.run_agent, args=("https://ffs.india-water.gov.in/", "g", None),
+                              kwargs={"ledger": ledger})
+    holder.start()
+    deadline = time.time() + 5
+    while not fake.calls(f"GET {AGENT}/v1/runs/run_1") and time.time() < deadline:
+        time.sleep(0.01)
+    cancel = threading.Event()
+    outcome = {}
+
+    def waiter():
+        try:
+            client.run_agent("https://ffs.india-water.gov.in/", "g", None, ledger=ledger, cancel_event=cancel)
+            outcome["result"] = "ran"
+        except Exception as exc:  # noqa: BLE001
+            outcome["result"] = type(exc).__name__
+
+    blocked = threading.Thread(target=waiter)
+    blocked.start()
+    time.sleep(0.1)
+    cancel.set()
+    blocked.join(2)
+    still_waiting = blocked.is_alive()
+    release.set()
+    holder.join(5)
+    blocked.join(5)
+    assert (still_waiting, outcome["result"]) == (False, "TinyFishCancelled")
+    assert len(fake.calls(f"POST {AGENT}/v1/automation/run-async")) == 1
+
+
 def test_budget_guard_refuses_new_runs():
     ledger = CostLedger(0.05, 0.016)
     assert ledger.reserve(30) == 3
