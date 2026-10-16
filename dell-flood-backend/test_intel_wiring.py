@@ -71,6 +71,7 @@ from app.intel.evidence import (
 from app.intel.store import IntelStore
 from app.ml.inference import get_shared_model
 
+sys.modules["app.aws.dynamodb_service"].LOCAL_FALLBACK_FILE = os.path.join(SANDBOX_DIR, "dynamodb_local_cache.json")
 client = TestClient(main.app)
 PATNA = {"location": "Patna, Bihar", "lat": 25.6124, "lon": 85.1376}
 _counter = {"n": 0}
@@ -151,6 +152,90 @@ def test_intel_router_is_mounted_and_gated():
     res = client.get("/api/agent/web-intelligence/config", headers=_official_headers())
     assert res.status_code == 200, res.text
     assert (res.json()["mode"], res.json()["enabled"]) == ("replay", True)
+
+
+
+def _patna_evidence():
+    return [
+        _evidence(1, EvidenceCategory.river_level, "Ganga at Gandhi Ghat 49.10 m, 0.50 m above danger level 48.60 m",
+                  measurement=Measurement(station="Gandhi Ghat", river="Ganga", value=49.1, unit="m", danger_level=48.6),
+                  signal=Signal.elevated),
+        _evidence(2, EvidenceCategory.official_alert, "Severe flood situation on Ganga at Patna (SACHET CAP)",
+                  url="https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=1",
+                  product=ProductId.official_alerts, signal=Signal.elevated),
+    ]
+
+
+def test_cycle_attaches_stored_evidence_to_the_hitl_draft():
+    service = _fresh_env()
+    run = _store_run(service, _patna_evidence())
+    headers = _official_headers()
+    with _ModelProbability(0.95):
+        result = endpoints.agent.run_cycle(language="en", **PATNA)
+    assert result["agent_nodes_status"]["WebEvidenceAgent"] == "ATTACHED"
+    assert (result["web_intelligence"]["run_id"], result["web_intelligence"]["affects_escalation"]) == (run.run_id, False)
+    queue = client.get("/api/hitl/queue", headers=headers).json()["items"]
+    item = next(i for i in queue if i["draft_id"] == result["hitl_draft_id"])
+    web = item["web_evidence"]
+    assert (web["status"], web["run_id"]) == ("ATTACHED", run.run_id)
+    assert [(e["claim"], e["mock"]) for e in web["evidence"]] == [
+        ("Ganga at Gandhi Ghat 49.10 m, 0.50 m above danger level 48.60 m", True),
+        ("Severe flood situation on Ganga at Patna (SACHET CAP)", True),
+    ]
+
+
+def test_stale_and_missing_evidence_are_labelled():
+    service = _fresh_env()
+    with _ModelProbability(0.0):
+        none = incident_orchestrator.get_incident_orchestrator().run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
+    _store_run(service, _patna_evidence(), age=timedelta(hours=30))
+    with _ModelProbability(0.0):
+        stale = incident_orchestrator.get_incident_orchestrator().run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
+    assert (none["agent_nodes_status"]["WebEvidenceAgent"], none["web_intelligence"]["evidence"]) == ("NONE_AVAILABLE", [])
+    assert stale["agent_nodes_status"]["WebEvidenceAgent"] == "STALE"
+    assert len(stale["web_intelligence"]["evidence"]) == 2
+
+
+def test_web_evidence_never_changes_escalation():
+    orchestrator = incident_orchestrator.get_incident_orchestrator()
+
+    def outcome(with_evidence, probability):
+        service = _fresh_env()
+        if with_evidence:
+            _store_run(service, _patna_evidence())
+        with _ModelProbability(probability):
+            res = orchestrator.run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
+        return res["agent_nodes_status"]["WebEvidenceAgent"], (res["escalation_tier"], res["severity"], res["escalation_reasons"])
+
+    for probability in (0.0, 0.95):
+        bare_status, bare = outcome(False, probability)
+        web_status, web = outcome(True, probability)
+        assert (bare_status, web_status) == ("NONE_AVAILABLE", "ATTACHED")
+        assert web == bare, (probability, web, bare)
+    assert outcome(True, 0.0)[1][:2] == ("NONE", "LOW")
+
+
+def test_agent_cycle_makes_no_tinyfish_call():
+    seen = []
+
+    def record(request):
+        seen.append(str(request.url))
+        return httpx.Response(500, json={"error": {"code": "UNEXPECTED"}})
+
+    service = _fresh_env(mode="live", api_key="tf_test_key_0000000000", tinyfish_http=httpx.Client(transport=httpx.MockTransport(record)))
+    _store_run(service, _patna_evidence())
+    started = []
+    real_start = service.runner.start
+    service.runner.start = lambda request: started.append(request) or real_start(request)
+    try:
+        with _ModelProbability(0.0):
+            res = client.post("/api/agent-cycle", json={"location": "Patna, Bihar", "lat": 25.6124, "lon": 85.1376},
+                              headers=_official_headers())
+    finally:
+        del service.runner.start
+    assert res.status_code == 200, res.text
+    assert res.json()["web_intelligence"]["status"] == "ATTACHED"
+    assert (seen, started) == ([], [])
 
 
 if __name__ == "__main__":

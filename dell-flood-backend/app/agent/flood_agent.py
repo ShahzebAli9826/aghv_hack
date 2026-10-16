@@ -215,6 +215,7 @@ class FloodAgent:
             "evacuation": orch_res.get("evacuation", {}),
             "urnn": urnn_data,
             "target_phones": target_phones,
+            "web_intelligence": orch_res.get("web_intelligence"),
             "aws_cloud": {
                 "s3_report": s3_report_info,
                 "sns_broadcast": voice_dispatched.get("aws_dispatch", {}).get("sns", {}),
@@ -244,6 +245,7 @@ class FloodAgent:
                 "created_at": item.get("created_at"),
                 "status": "PENDING" if "PENDING" in st.upper() else st,
                 "cap_alert": cap,
+                "web_evidence": item.get("web_evidence"),
             })
         return formatted
 

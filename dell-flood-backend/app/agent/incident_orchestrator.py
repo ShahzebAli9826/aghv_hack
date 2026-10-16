@@ -10,8 +10,9 @@ from typing import Dict, Any, List, Optional, TypedDict
 from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
 from app.RAG.generator import SituationReportGenerator
 from app.api.auth_deps import normalize_and_validate_phone
+from app.agent import web_evidence
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
+DB_PATH = os.getenv("AEGIS_APP_DB") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
 HITL_PENDING = "PENDING_OFFICIAL_APPROVAL"
 HITL_APPROVED = "APPROVED_AND_DISPATCHED"
 HITL_APPROVED_NO_RECIPIENT = "APPROVED_NO_RECIPIENT"
@@ -66,6 +67,15 @@ def nearby_report_severity(lat: float, lon: float) -> Dict[str, Any]:
     }
 
 
+def _parse_evidence(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return {"status": "UNREADABLE", "evidence": []}
+
+
 class HitlDraftNotFound(LookupError):
     def __init__(self, draft_id: str):
         super().__init__(f"HITL draft {draft_id} does not exist")
@@ -77,6 +87,9 @@ class HitlDraftNotPending(RuntimeError):
         super().__init__(f"HITL draft {draft_id} is {status}, not {HITL_PENDING}")
         self.draft_id = draft_id
         self.status = status
+
+
+HITL_ADDED_COLUMNS = (("evidence_json", "TEXT"),)
 
 
 def _init_orchestrator_tables():
@@ -107,6 +120,10 @@ def _init_orchestrator_tables():
             )
             """
         )
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(hitl_approvals)")}
+        for name, ddl in HITL_ADDED_COLUMNS:
+            if name not in columns:
+                cur.execute(f"ALTER TABLE hitl_approvals ADD COLUMN {name} {ddl}")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -163,6 +180,7 @@ class MultiAgentIncidentOrchestrator:
         mcp_calls: List[Dict[str, Any]] = []
         nodes_status = {
             "MonitorAgent": "PENDING",
+            "WebEvidenceAgent": "PENDING",
             "CrowdIntelligenceAgent": "PENDING",
             "EOAnalystAgent": "PENDING",
             "LogisticsAgent": "PENDING",
@@ -207,6 +225,20 @@ class MultiAgentIncidentOrchestrator:
             f"Forecast 24h: {rain_data['forecast_rain_24h_mm']}mm | "
             f"GloFAS Discharge: {gauge_data['river_discharge_m3s']} m³/s ({gauge_data['status']}) -> Escalation: {escalation}"
         )
+
+        # ------------------------------------------------------------------
+        # NODE 1b: WebEvidenceAgent (read-only: attaches stored official-source evidence, never escalates)
+        # ------------------------------------------------------------------
+        nodes_status["WebEvidenceAgent"] = "RUNNING"
+        web_intel = web_evidence.lookup(location, lat, lon)
+        nodes_status["WebEvidenceAgent"] = web_intel["status"]
+        if web_intel["status"] == web_evidence.FAILED:
+            logs.append(f"[WebEvidenceAgent] FAILED: {web_intel['error']}. The cycle continues without web evidence.")
+        else:
+            logs.append(
+                f"[WebEvidenceAgent] {web_intel['status']}: {len(web_intel['evidence'])} official-source item(s) "
+                f"from run {web_intel['run_id'] or 'none'} attached for human review; escalation unchanged ({escalation})."
+            )
 
         # ------------------------------------------------------------------
         # NODE 2: EOAnalystAgent (SegFormer SAR+Optical + U-RNN 4D Depth + OSM)
@@ -332,6 +364,7 @@ class MultiAgentIncidentOrchestrator:
                 language=language,
                 cap_payload=cap_payload,
                 target_phone=target_phone,
+                web_intel=web_intel,
             )
             nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
             logs.append(
@@ -364,6 +397,7 @@ class MultiAgentIncidentOrchestrator:
             "report_validation": {"grounding_passed": report["grounding_passed"], "checks": report["checks"]},
             "cap_alert": cap_payload,
             "hitl_draft_id": draft_id,
+            "web_intelligence": web_intel,
         }
 
     def _save_hitl_draft(
@@ -380,6 +414,7 @@ class MultiAgentIncidentOrchestrator:
         language: str,
         cap_payload: Dict[str, Any],
         target_phone: Optional[str],
+        web_intel: Optional[Dict[str, Any]] = None,
     ):
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -389,8 +424,8 @@ class MultiAgentIncidentOrchestrator:
                 INSERT OR REPLACE INTO hitl_approvals (
                     draft_id, run_id, location, lat, lon, severity, escalation_tier,
                     area_sq_km, max_depth_m, target_phone, language, script_hi, script_en,
-                    cap_xml, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cap_xml, status, created_at, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     draft_id,
@@ -409,6 +444,7 @@ class MultiAgentIncidentOrchestrator:
                     cap_payload["xml"],
                     HITL_PENDING,
                     time.time(),
+                    json.dumps(web_intel, default=str) if web_intel else None,
                 ),
             )
             conn.commit()
@@ -425,6 +461,8 @@ class MultiAgentIncidentOrchestrator:
             cur.execute("SELECT * FROM hitl_approvals ORDER BY created_at DESC LIMIT 20")
             rows = [dict(r) for r in cur.fetchall()]
             conn.close()
+            for row in rows:
+                row["web_evidence"] = _parse_evidence(row.pop("evidence_json", None))
             return rows
         except Exception:
             return []

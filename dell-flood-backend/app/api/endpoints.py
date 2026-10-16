@@ -1933,6 +1933,7 @@ def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(r
         "cap_alert": res.get("cap_alert", {}),
         "hitl_pending": res.get("hitl_pending", []),
         "voice_dispatched": res.get("voice_dispatched", {}),
+        "web_intelligence": res.get("web_intelligence"),
         "severity": res.get("severity", "NONE"),
         "escalation_tier": res.get("escalation_tier", "NORMAL"),
         "area_sq_km": res.get("area_sq_km", 0.0),
