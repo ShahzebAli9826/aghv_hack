@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, TypedDict
 
 from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
-from app.RAG.generator import SituationReportGenerator
+from app.RAG.generator import SituationReportGenerator, format_official_sources
 from app.api.auth_deps import normalize_and_validate_phone
 from app.agent import web_evidence
 
@@ -343,12 +343,15 @@ class MultiAgentIncidentOrchestrator:
         # NODE 5: ReporterAgent (4-Format Report + Numeric Claim Validator)
         # ------------------------------------------------------------------
         nodes_status["ReporterAgent"] = "RUNNING"
+        sources = web_evidence.report_sources(web_intel)
         if "EOAnalystAgent" in degraded:
             report_text = (
                 f"SITUATION REPORT NOT GENERATED for {location}: EO analysis failed ({degraded['EOAnalystAgent']}). "
                 f"Flood area, depth and impact are unknown. Escalation {escalation} rests on hydrology only"
                 + (f": {'; '.join(escalation_reasons)}." if escalation_reasons else ".")
             )
+            if sources:
+                report_text += format_official_sources(sources, web_intel["status"], web_intel.get("run_id"))
             report = {"grounding_passed": None, "checks": {}}
             nodes_status["ReporterAgent"] = "SKIPPED_EO_FAILED"
             logs.append("[ReporterAgent] Skipped: no model figures to report because EO analysis failed.")
@@ -364,6 +367,9 @@ class MultiAgentIncidentOrchestrator:
                 report_format=report_format,
                 max_depth_m=peak_depth_60m,
                 language=language,
+                official_sources=sources,
+                official_sources_status=web_intel["status"],
+                official_sources_run_id=web_intel.get("run_id"),
             )
             report_text = report["report_text"]
             uncited = [name for name, ok in report["checks"].items() if not ok]

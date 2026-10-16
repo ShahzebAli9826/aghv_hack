@@ -289,6 +289,71 @@ def test_web_evidence_failure_degrades_instead_of_crashing():
     assert res["hitl_draft_id"].startswith("hitl_")
 
 
+class _UngroundedLlm:
+    """An LLM reply that cites none of the model figures."""
+
+    class _Reply:
+        status_code = 200
+
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "Water is rising near the river."}]}}]}
+
+    def __init__(self, generator):
+        self.generator = generator
+        self.module = sys.modules["app.RAG.generator"]
+
+    def __enter__(self):
+        self.saved = (self.module.requests, self.generator.gemini_key)
+        self.module.requests = type("FakeRequests", (), {"post": staticmethod(lambda *a, **k: self._Reply())})
+        self.generator.gemini_key = "test-key"
+
+    def __exit__(self, *exc):
+        self.module.requests, self.generator.gemini_key = self.saved
+
+
+def test_sitrep_cites_web_sources_separately_and_never_grounds_on_them():
+    generator = incident_orchestrator.get_incident_orchestrator().rag_generator
+    source = {
+        "claim": "4321 people in 87 camps; 1.25 sq km flooded; 3 centers closed", "source_name": "Bihar DMD",
+        "source_type": "official", "grade": "verified_official", "source_url": "https://state.bihar.gov.in/disastermgmt/mock",
+        "published_at": "2026-10-16T04:00:00+00:00", "observed_at": None, "retrieved_at": "2026-10-16T06:00:00+00:00",
+        "mock": True,
+    }
+    with _UngroundedLlm(generator):
+        res = generator.generate_report_with_validation(
+            location="Patna", area_sq_km=1.25, classification="Flood", severity="HIGH", population_affected=4321,
+            buildings_damaged=87, facilities_at_risk=3, report_format="NDMA", max_depth_m=0.5, language="en",
+            official_sources=[source], official_sources_status="ATTACHED", official_sources_run_id="wi_abc",
+        )
+    assert (res["grounding_passed"], set(res["checks"].values())) == (False, {False})
+    assert res["official_sources_section"].splitlines()[1:6] == [
+        "OFFICIAL SOURCES (RETRIEVED VIA TINYFISH)",
+        "Context for the reviewing official. These are claims published by the listed sources, not Aegis",
+        "model output; none of the figures above come from them, and they cannot trigger an alert.",
+        "Web evidence status: ATTACHED (run wi_abc)",
+        "1. [MOCK REPLAY] 4321 people in 87 camps; 1.25 sq km flooded; 3 centers closed",
+    ]
+    assert res["report_text"].endswith(res["official_sources_section"])
+    assert "Issued: 2026-10-16T04:00:00+00:00 | Observed: not shown | Retrieved: 2026-10-16T06:00:00+00:00" in res["report_text"]
+
+
+def test_cycle_report_and_pdf_carry_the_official_sources_section():
+    from pypdf import PdfReader
+    from app.agent.tools import export_pdf
+
+    service = _fresh_env()
+    _store_run(service, _patna_evidence())
+    with _ModelProbability(0.95):
+        res = endpoints.agent.run_cycle(language="en", **PATNA)
+    assert "OFFICIAL SOURCES (RETRIEVED VIA TINYFISH)" in res["report"]
+    assert "1. [MOCK REPLAY] Ganga at Gandhi Ghat 49.10 m, 0.50 m above danger level 48.60 m" in res["report"]
+    pdf = os.path.join(SANDBOX_DIR, "reports", "report_wiring_check.pdf")
+    assert export_pdf(pdf, res["report"], "Patna, Bihar", res["severity"]) is True
+    text = "".join(page.extract_text() for page in PdfReader(pdf).pages)
+    assert "OFFICIAL SOURCES (RETRIEVED VIA TINYFISH)" in text
+    assert "https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=1" in text.replace("\n", "")
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
