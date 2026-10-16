@@ -328,6 +328,59 @@ def test_hard_coded_recipient_is_gone_from_source():
     assert _source_files_containing(REPO_ROOT, needle) == []
 
 
+def test_escalation_follows_the_evidence():
+    orchestrator = incident_orchestrator.get_incident_orchestrator()
+    with _ModelProbability(0.0):
+        dry = orchestrator.run_incident_graph("Phase0 Dry Plot", 12.9716, 77.5946, language="en", report_format="NDMA")
+    assert (dry["escalation_tier"], dry["severity"], dry["hitl_draft_id"], dry["cap_alert"]) == ("NONE", "LOW", None, {})
+    assert dry["escalation_reasons"] == []
+    assert (dry["eo"]["area_sq_km"], dry["impact"]["population_affected"]) == (0.0, 0)
+    assert dry["eo"]["input_provenance"] == "esri_basemap+synthetic_sar"
+    assert dry["urnn"]["depth_provenance"] == "heuristic_untrained"
+    assert dry["crowd"]["user_severity_provenance"] == "no unresolved citizen reports within 2 km in 12 h; user severity set to 0"
+    assert dry["crowd"]["verification_score"] == 0.0
+    assert dry["agent_nodes_status"]["CommsAgent"] == "SKIPPED_NO_ESCALATION"
+    assert "[ReporterAgent] Generated NDMA Situation Report — Numeric Hallucination Validator: PASS." in dry["logs"]
+
+    with _ModelProbability(0.95):
+        wet = orchestrator.run_incident_graph("Phase0 Wet Plot", 12.9716, 77.5946, language="en", report_format="NDMA")
+    assert (wet["escalation_tier"], wet["severity"]) == ("RED", "CRITICAL")
+    assert wet["escalation_reasons"][0].startswith("RED: segmented flood area ")
+    assert wet["hitl_draft_id"].startswith("hitl_")
+
+
+def test_reporter_logs_the_validators_real_verdict():
+    class UngroundedGeminiReply:
+        status_code = 200
+
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "Water is rising near the river. Stay alert."}]}}]}
+
+    orchestrator = incident_orchestrator.get_incident_orchestrator()
+    generator_module = sys.modules["app.RAG.generator"]
+    saved = (generator_module.requests, orchestrator.rag_generator.gemini_key)
+    generator_module.requests = type("FakeRequests", (), {"post": staticmethod(lambda *a, **k: UngroundedGeminiReply())})
+    orchestrator.rag_generator.gemini_key = "test-key"
+    try:
+        with _ModelProbability(0.0):
+            res = orchestrator.run_incident_graph("Phase0 Ungrounded", 12.9716, 77.5946, language="en", report_format="NDMA")
+    finally:
+        generator_module.requests, orchestrator.rag_generator.gemini_key = saved
+    assert res["report_validation"]["grounding_passed"] is False
+    assert (
+        "[ReporterAgent] Generated NDMA Situation Report — Numeric Hallucination Validator: "
+        "FAIL (area_grounded, population_grounded, buildings_grounded, facilities_grounded)."
+    ) in res["logs"]
+
+
+def test_agent_cycle_response_has_no_invented_numbers():
+    with _ModelProbability(0.0):
+        res = endpoints.agent.run_cycle(location="Phase0 Dry Cycle", lat=12.9716, lon=77.5946, language="en")
+    assert (res["severity"], res["escalation_tier"], res["hitl_draft_id"]) == ("LOW", "NONE", None)
+    assert (res["area_sq_km"], res["population"], res["buildings"], res["facilities"]) == (0.0, 0, 0, 0)
+    assert res["validation"]["grounding_passed"] is True
+
+
 def test_cors_default_has_no_wildcard():
     res = client.options(
         "/api/hitl/queue",

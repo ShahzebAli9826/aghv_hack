@@ -115,14 +115,14 @@ class FloodAgent:
         urnn_data = orch_res.get("urnn", {})
         impact_data = orch_res.get("impact", {})
 
-        area_sq_km = float(eo_data.get("area_sq_km", 1.85))
-        confidence = int(float(eo_data.get("confidence_pct", 86.0)))
-        classification = eo_data.get("classification", "Flood Inundation")
-        severity = orch_res.get("severity", "HIGH")
-        population_affected = int(impact_data.get("population_affected", 1420))
-        buildings_damaged = int(impact_data.get("buildings_damaged", 310))
-        facilities_at_risk = int(impact_data.get("facilities_at_risk", 4))
-        peak_depth_m = float(urnn_data.get("horizon_metrics", {}).get("t_60m", {}).get("max_depth_m", 0.74))
+        area_sq_km = eo_data.get("area_sq_km")
+        confidence = eo_data.get("confidence_pct")
+        classification = eo_data.get("classification")
+        severity = orch_res["severity"]
+        population_affected = impact_data.get("population_affected")
+        buildings_damaged = impact_data.get("buildings_damaged")
+        facilities_at_risk = impact_data.get("facilities_at_risk")
+        peak_depth_m = urnn_data.get("horizon_metrics", {}).get("t_60m", {}).get("max_depth_m")
         report_text = orch_res.get("situation_report", "")
 
         # Export slugified PDF report & Vault to Amazon S3
@@ -187,12 +187,13 @@ class FloodAgent:
             "run_id": orch_res.get("run_id"),
             "location": location,
             "severity": severity,
-            "escalation_tier": orch_res.get("escalation_tier", "ORANGE"),
+            "escalation_tier": orch_res["escalation_tier"],
+            "escalation_reasons": orch_res["escalation_reasons"],
             "classification": classification,
             "area_sq_km": area_sq_km,
             "peak_depth_m": peak_depth_m,
             "gauge_status": gauge_status,
-            "river_discharge_m3s": gauge_info.get("river_discharge_m3s", 850.0),
+            "river_discharge_m3s": gauge_info.get("river_discharge_m3s"),
             "rainfall_5day_mm": rainfall_5day,
             "antecedent_rain_5d_mm": rain_details["antecedent_rain_5d_mm"],
             "forecast_rain_24h_mm": rain_details["forecast_rain_24h_mm"],
@@ -202,6 +203,7 @@ class FloodAgent:
             "facilities": facilities_at_risk,
             "report": report_text,
             "report_format": report_format,
+            "validation": orch_res["report_validation"],
             "agent_nodes_status": orch_res.get("agent_nodes_status", {}),
             "agent_statuses": orch_res.get("agent_nodes_status", {}),
             "mcp_provenance": orch_res.get("mcp_provenance", []),

@@ -34,7 +34,7 @@ from app.aegis.pipeline.impact_analyzer import (
 )
 from app.aegis.routing.dynamic_router import DynamicEvacuationRouter
 from app.agent.flood_agent import FloodAgent
-from app.agent.incident_orchestrator import HitlDraftNotFound, HitlDraftNotPending
+from app.agent.incident_orchestrator import HitlDraftNotFound, HitlDraftNotPending, REPORT_SEVERITY_WEIGHTS
 from app.agent.tools import (
     check_rainfall,
     check_gauge,
@@ -1452,6 +1452,7 @@ def run_pipeline_task(job_id: str, lat: float, lon: float, cloud_cover: float = 
             "horizons_min": urnn_nowcast["horizons_min"],
             "latency_ms": urnn_nowcast.get("latency_ms", 42.5),
             "speedup_vs_mike_plus": urnn_nowcast.get("speedup_vs_mike_plus", "140x faster"),
+            "depth_provenance": urnn_nowcast["depth_provenance"],
             "max_depth_0m": urnn_nowcast["max_depth_0m"],
             "max_depth_15m": urnn_nowcast["max_depth_15m"],
             "max_depth_30m": urnn_nowcast["max_depth_30m"],
@@ -1803,16 +1804,6 @@ def get_complaints():
     total_resolved = 0
     location_groups = {}
     
-    SEVERITY_WEIGHTS = {
-        "CRITICAL": 100.0,
-        "SEVERE": 92.0,
-        "HIGH": 80.0,
-        "MODERATE": 60.0,
-        "MEDIUM": 60.0,
-        "LOW": 35.0,
-        "MINOR": 25.0,
-    }
-    
     for r in rows:
         c_sev = (r[4] or "MODERATE").upper()
         c_confirmed = int(r[7] or 0)
@@ -1820,7 +1811,7 @@ def get_complaints():
         img_b64 = r[10] if len(r) > 10 and r[10] else ""
         
         # P24: Explicit 60% user-reported severity + 40% model/telemetry confidence
-        user_sev_score = SEVERITY_WEIGHTS.get(c_sev, 60.0)
+        user_sev_score = REPORT_SEVERITY_WEIGHTS.get(c_sev, 60.0)
         model_conf_score = 92.0 if c_confirmed == 1 else 45.0
         if img_b64:
             model_conf_score = min(100.0, model_conf_score + 6.0)
@@ -2598,6 +2589,7 @@ def get_urnn_nowcast(
             "horizons_min": nowcast["horizons_min"],
             "latency_ms": nowcast.get("latency_ms", 42.5),
             "speedup_vs_mike_plus": nowcast.get("speedup_vs_mike_plus", "140x faster"),
+            "depth_provenance": nowcast["depth_provenance"],
             "max_depth_0m": nowcast["max_depth_0m"],
             "max_depth_15m": nowcast["max_depth_15m"],
             "max_depth_30m": nowcast["max_depth_30m"],

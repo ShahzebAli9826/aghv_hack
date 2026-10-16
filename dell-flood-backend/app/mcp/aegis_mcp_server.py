@@ -545,6 +545,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         data = {
             "sentinel2_scene": f"S2B_MSIL2A_{datetime.now(timezone.utc).strftime('%Y%m%d')}_T45QWF",
             "sentinel1_scene": f"S1A_IW_GRDH_{datetime.now(timezone.utc).strftime('%Y%m%d')}_VV_VH",
+            "scene_id_provenance": "synthetic",
+            "input_provenance": "esri_basemap+synthetic_sar",
             "cloud_cover_pct": sat["cloud_cover"],
             "fusion_mode": "SAR_DOMINATED_CLOUD_GATE" if sat["cloud_cover"] > 35 else "DUAL_OPTICAL_SAR_FUSION",
         }
@@ -572,6 +574,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "base_elevation_m": round(base_elev, 1),
             "ecc_alignment": ecc_meta,
             "cloud_cover_pct": sat["cloud_cover"],
+            "input_provenance": "esri_basemap+synthetic_sar",
         }
 
     elif tool_name == "run_urnn_nowcast":
@@ -586,6 +589,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "latency_ms": res["latency_ms"],
             "telemetry": res["telemetry"],
             "horizon_metrics": res["horizon_metrics"],
+            "depth_provenance": res["depth_provenance"],
         }
 
     elif tool_name == "estimate_osm_impact":
