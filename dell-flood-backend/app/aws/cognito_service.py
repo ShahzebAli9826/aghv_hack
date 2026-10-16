@@ -20,11 +20,14 @@ def _has_real_cognito_config() -> bool:
 
 
 def _load_fallback_secret() -> str:
-    secret = os.getenv("AWS_COGNITO_FALLBACK_SECRET", "").strip()
-    if secret and not secret.startswith("your_"):
+    from app.api.auth_deps import explicit_secret, require_shared_secret_for_workers
+
+    secret = explicit_secret("AWS_COGNITO_FALLBACK_SECRET") or explicit_secret("JWT_SECRET_KEY")
+    if secret:
         return secret
+    require_shared_secret_for_workers("JWT_SECRET_KEY")
     print(
-        "[cognito] AWS_COGNITO_FALLBACK_SECRET is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        "[cognito] AWS_COGNITO_FALLBACK_SECRET and JWT_SECRET_KEY are unset or template placeholders; using a random per-process secret. Issued tokens stop working when the server restarts.",
         file=sys.stderr,
     )
     return secrets.token_urlsafe(48)
@@ -93,7 +96,7 @@ class CognitoAuthVerifier:
                 attrs = {a["Name"]: a["Value"] for a in resp.get("UserAttributes", [])}
                 return {
                     "username": resp.get("Username"),
-                    "role": attrs.get("custom:role", "Citizen"),
+                    "role": attrs.get("custom:role", "Citizen").lower(),
                     "email": attrs.get("email", ""),
                     "provider": "AMAZON_COGNITO_LIVE",
                 }
@@ -110,7 +113,7 @@ class CognitoAuthVerifier:
             )
             return {
                 "username": decoded.get("cognito:username") or decoded.get("sub", "user"),
-                "role": decoded.get("custom:role", "Citizen"),
+                "role": str(decoded.get("custom:role", "Citizen")).lower(),
                 "groups": decoded.get("cognito:groups", ["Citizens"]),
                 "email": decoded.get("email", ""),
                 "provider": "AMAZON_COGNITO_JWT",

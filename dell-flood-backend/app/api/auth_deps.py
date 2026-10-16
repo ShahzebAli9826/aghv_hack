@@ -12,10 +12,38 @@ from typing import Dict, Any, Optional
 from fastapi import Header, HTTPException, Depends
 
 
+def explicit_secret(name: str) -> Optional[str]:
+    """The env value, unless it is empty or still the .env.example placeholder."""
+    secret = os.getenv(name, "").strip()
+    return secret if secret and not secret.startswith("your_") else None
+
+
+def configured_workers() -> int:
+    """Worker count from WEB_CONCURRENCY or uvicorn's --workers (spawned workers inherit the parent's argv)."""
+    counts = [os.getenv("WEB_CONCURRENCY", "")]
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--workers" and i + 1 < len(argv):
+            counts.append(argv[i + 1])
+        elif arg.startswith("--workers="):
+            counts.append(arg.split("=", 1)[1])
+    return max([int(c) for c in counts if c.strip().isdigit()] or [1])
+
+
+def require_shared_secret_for_workers(name: str) -> None:
+    workers = configured_workers()
+    if workers > 1:
+        raise RuntimeError(
+            f"{name} must be set explicitly when running more than one worker (WEB_CONCURRENCY/--workers = {workers}): "
+            "each worker would otherwise sign tokens with its own random secret and reject the others' tokens."
+        )
+
+
 def _load_jwt_secret() -> str:
-    secret = os.getenv("JWT_SECRET_KEY", "").strip()
-    if secret and not secret.startswith("your_"):
+    secret = explicit_secret("JWT_SECRET_KEY")
+    if secret:
         return secret
+    require_shared_secret_for_workers("JWT_SECRET_KEY")
     print(
         "[auth] JWT_SECRET_KEY is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
         file=sys.stderr,
@@ -155,7 +183,7 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
 
 async def require_official(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """FastAPI RBAC dependency enforcing 'official' role (Solves P1)."""
-    if user.get("role") not in ("official", "admin"):
+    if str(user.get("role") or "").lower() not in ("official", "admin"):
         raise HTTPException(status_code=403, detail="Official disaster-management role required")
     return user
 

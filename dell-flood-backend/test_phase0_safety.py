@@ -594,6 +594,40 @@ def test_single_recipient_voice_call_does_not_broadcast():
     assert sns.calls == []
 
 
+def test_multi_worker_needs_an_explicit_jwt_secret():
+    from app.api import auth_deps
+
+    saved = {k: os.environ.get(k) for k in ("JWT_SECRET_KEY", "WEB_CONCURRENCY")}
+    try:
+        os.environ["JWT_SECRET_KEY"] = ""
+        os.environ["WEB_CONCURRENCY"] = "4"
+        try:
+            auth_deps._load_jwt_secret()
+        except RuntimeError as exc:
+            assert str(exc) == (
+                "JWT_SECRET_KEY must be set explicitly when running more than one worker (WEB_CONCURRENCY/--workers = 4): "
+                "each worker would otherwise sign tokens with its own random secret and reject the others' tokens."
+            )
+        else:
+            raise AssertionError("multi-worker start accepted a random per-process JWT secret")
+        os.environ["JWT_SECRET_KEY"] = "phase0-shared-secret"
+        assert auth_deps._load_jwt_secret() == "phase0-shared-secret"
+        os.environ["JWT_SECRET_KEY"] = ""
+        os.environ["WEB_CONCURRENCY"] = "1"
+        assert len(auth_deps._load_jwt_secret()) >= 32
+    finally:
+        for k, v in saved.items():
+            os.environ[k] = v or ""
+
+
+def test_cognito_role_is_case_insensitive():
+    from app.aws import cognito_service
+
+    token = cognito_service.issue_token(username="phase0_commander", role="Official")["access_token"]
+    res = client.get("/api/hitl/queue", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
