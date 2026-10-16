@@ -28,7 +28,7 @@ from app.intel.config import Mode, load_settings  # noqa: E402
 from app.intel.direct import DirectFetchError, safe_get  # noqa: E402
 from app.intel.monitors import MonitorKind  # noqa: E402
 from app.intel.evidence import (  # noqa: E402
-    AccessMethod, Evidence, EvidenceCategory, FailureReason, Freshness, Grade, LocationQuery,
+    AccessMethod, Evidence, EvidenceCategory, FailureReason, Freshness, Grade, LocationMatch, LocationQuery,
     Measurement, ProductId, RunState, Signal, SourceType, ValidationStatus, WebIntelRun,
 )
 from app.intel.products import PRODUCTS  # noqa: E402
@@ -662,6 +662,20 @@ def test_stale_future_and_missing_timestamps():
     run = run_and_wait(make_service(tinyfish=FakeHTTP(agent_routes({"run_old": body}))), [ProductId.river_levels])
     assert fail_reasons(run) == {"cwc_ffs": "stale"}
     assert run.evidence[0].grade is Grade.insufficient
+
+
+def test_location_match_needs_whole_words():
+    ara = LocationQuery(query="Ara", latitude=25.56, longitude=84.66, jurisdiction="IN-BR", state="Bihar",
+                        district="Ara")
+    goa = LocationQuery(query="Goa", latitude=15.3, longitude=74.1, jurisdiction="IN-GA", state="Goa")
+
+    def match(location, district):
+        item = _item("gauge reading").model_copy(update={"district": district})
+        return assess(item, location=location, max_age=timedelta(hours=6)).location_match
+
+    assert [match(ara, d) for d in ("Parasi", "Ara", "Ara Sadar")] == [
+        LocationMatch.uncertain, LocationMatch.verified, LocationMatch.approximate]
+    assert [match(goa, d) for d in ("Goalpara", "North Goa")] == [LocationMatch.uncertain, LocationMatch.approximate]
 
 
 def test_duplicate_claims_deduped_in_replay():

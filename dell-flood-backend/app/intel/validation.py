@@ -277,11 +277,15 @@ def assess_location(
             return LocationMatch.verified
         if distance <= 100:
             return LocationMatch.approximate
-    if district and (district in found_district or re.search(rf"\b{re.escape(district)}\b", text)):
-        return LocationMatch.approximate
-    if state and (state in found_district or re.search(rf"\b{re.escape(state)}\b", text)):
-        return LocationMatch.approximate
+    for name in (district, state):
+        if name and (_mentions(found_district, name) or _mentions(text, name)):
+            return LocationMatch.approximate
     return LocationMatch.uncertain
+
+
+def _mentions(text: str, name: str) -> bool:
+    """Whole-word match, so "ara" does not match "parasi" nor "goa" match "goalpara"."""
+    return re.search(rf"\b{re.escape(name)}\b", text) is not None
 
 
 def measurement_problem(m: Measurement) -> str | None:
