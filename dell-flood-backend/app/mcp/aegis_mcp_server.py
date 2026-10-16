@@ -400,6 +400,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "lat": {"type": "number"},
                 "lon": {"type": "number"},
                 "severity": {"type": "string"},
+                "dry_run": {"type": "boolean"},
             },
             "required": ["location"],
         },
@@ -415,9 +416,10 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "param_name": {"type": "string"},
                 "param_value": {"type": "string"},
                 "sos_payload": {"type": "object"},
+                "dry_run": {"type": "boolean"},
             },
         },
-        "requires_official_approval": False,
+        "requires_official_approval": True,
     },
     {
         "name": "aws_provision_free_tier_resources",
@@ -428,7 +430,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "dry_run": {"type": "boolean"},
             },
         },
-        "requires_official_approval": False,
+        "requires_official_approval": True,
     },
     {
         "name": "aws_run_free_tier_diagnostic_suite",
@@ -787,15 +789,18 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         )
 
     elif tool_name == "aws_orchestrate_step_functions":
+        dry_run = bool(arguments.get("dry_run", False))
         evt = events_sfn_service.publish_disaster_event(
             detail_type="FloodAnomalyDetected",
             detail={"location": location, "lat": lat, "lon": lon, "severity": arguments.get("severity", "CRITICAL")},
+            dry_run=dry_run,
         )
         sfn = events_sfn_service.start_incident_workflow(
             location=location,
             lat=lat,
             lon=lon,
             severity=str(arguments.get("severity", "CRITICAL")),
+            dry_run=dry_run,
         )
         data = {"eventbridge": evt, "step_functions": sfn}
 
@@ -803,7 +808,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         act = str(arguments.get("action", "status")).lower()
         if act == "enqueue_sos":
             data = sqs_ssm_service.enqueue_sos_packet(
-                arguments.get("sos_payload") or {"location": location, "severity": "CRITICAL", "trapped": 4}
+                arguments.get("sos_payload") or {"location": location, "severity": "CRITICAL", "trapped": 4},
+                dry_run=bool(arguments.get("dry_run", False)),
             )
         elif act == "update_param":
             data = sqs_ssm_service.update_operational_parameter(
@@ -814,7 +820,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             data = sqs_ssm_service.get_operational_parameters()
 
     elif tool_name == "aws_provision_free_tier_resources":
-        data = aws_provisioner.provision_all()
+        data = aws_provisioner.provision_all(dry_run=bool(arguments.get("dry_run", False)))
 
     elif tool_name == "aws_run_free_tier_diagnostic_suite":
         suite_t0 = time.perf_counter()
@@ -831,9 +837,9 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon Translate", "aws_translate_emergency_bulletin", {"text": "Evacuate low-lying river corridors immediately.", "target_language": "as", "location": location}),
             ("Amazon Comprehend", "aws_triage_sos_comprehend", {"description": "5 elderly citizens and 2 infants trapped near hospital in chest-deep water", "location": location}),
             ("Amazon Rekognition", "aws_verify_flood_photo_rekognition", {"image_path": "./delhi_optical.png", "claimed_severity": "CRITICAL", "location": location}),
-            ("EventBridge & Step Functions", "aws_orchestrate_step_functions", {"location": location, "lat": lat, "lon": lon, "severity": "CRITICAL"}),
-            ("Amazon SQS & AWS SSM", "aws_queue_and_ssm_config", {"action": "enqueue_sos", "sos_payload": {"location": location, "severity": "CRITICAL"}}),
-            ("AWS Free Tier Provisioner", "aws_provision_free_tier_resources", {"dry_run": False}),
+            ("EventBridge & Step Functions (dry run, nothing started)", "aws_orchestrate_step_functions", {"location": location, "lat": lat, "lon": lon, "severity": "CRITICAL", "dry_run": True}),
+            ("Amazon SQS & AWS SSM (dry run, nothing enqueued)", "aws_queue_and_ssm_config", {"action": "enqueue_sos", "sos_payload": {"location": location, "severity": "CRITICAL"}, "dry_run": True}),
+            ("AWS Free Tier Provisioner (dry run, nothing created)", "aws_provision_free_tier_resources", {"dry_run": True}),
         ]
         results_matrix = []
         for svc_label, sub_name, sub_args in sub_tools:

@@ -53,10 +53,11 @@ class EventBridgeStepFunctionsOrchestrator:
         detail_type: str,
         detail: Dict[str, Any],
         source: str = "aegis.flood.autonomous.engine",
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Publishes a structured disaster event to Amazon EventBridge."""
         event_id = f"evt-{uuid.uuid4().hex[:10]}"
-        if self.enabled and self._events:
+        if not dry_run and self.enabled and self._events:
             try:
                 resp = self._events.put_events(
                     Entries=[
@@ -100,6 +101,7 @@ class EventBridgeStepFunctionsOrchestrator:
         lat: float = 25.6124,
         lon: float = 85.1376,
         severity: str = "CRITICAL",
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Starts an AWS Step Functions execution for the 6-Agent Disaster Response State Machine."""
         exec_name = f"aegis-incident-{int(time.time())}-{uuid.uuid4().hex[:6]}"
@@ -111,7 +113,7 @@ class EventBridgeStepFunctionsOrchestrator:
             "initiated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        if self.enabled and self._sfn and "000000000000" not in self.state_machine_arn:
+        if not dry_run and self.enabled and self._sfn and "000000000000" not in self.state_machine_arn:
             try:
                 resp = self._sfn.start_execution(
                     stateMachineArn=self.state_machine_arn,

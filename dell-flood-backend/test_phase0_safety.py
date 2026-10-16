@@ -620,6 +620,48 @@ def test_multi_worker_needs_an_explicit_jwt_secret():
             os.environ[k] = v or ""
 
 
+def test_diagnostic_suite_provisions_and_enqueues_nothing_real():
+    from app.aws import provisioner, sqs_ssm_service, events_sfn_service
+
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):
+            return lambda **kwargs: self.calls.append((name, kwargs)) or {}
+
+    boto_clients, sqs, sfn, events = [], Recorder(), Recorder(), Recorder()
+    import boto3
+    saved = (provisioner._has_real_aws_creds, boto3.client,
+             sqs_ssm_service.enabled, sqs_ssm_service._sqs, sqs_ssm_service.queue_url,
+             events_sfn_service.enabled, events_sfn_service._sfn, events_sfn_service._events, events_sfn_service.state_machine_arn)
+    provisioner._has_real_aws_creds = lambda: True
+    boto3.client = lambda *a, **k: boto_clients.append(a) or Recorder()
+    sqs_ssm_service.enabled, sqs_ssm_service._sqs = True, sqs
+    sqs_ssm_service.queue_url = "https://sqs.ap-south-1.amazonaws.com/111111111111/phase0.fifo"
+    events_sfn_service.enabled, events_sfn_service._sfn, events_sfn_service._events = True, sfn, events
+    events_sfn_service.state_machine_arn = "arn:aws:states:ap-south-1:111111111111:stateMachine:phase0"
+    try:
+        res = client.post("/api/aws/test-mcp-suite", headers=_official_headers())
+    finally:
+        (provisioner._has_real_aws_creds, boto3.client,
+         sqs_ssm_service.enabled, sqs_ssm_service._sqs, sqs_ssm_service.queue_url,
+         events_sfn_service.enabled, events_sfn_service._sfn, events_sfn_service._events,
+         events_sfn_service.state_machine_arn) = saved
+    assert res.status_code == 200, res.text
+    assert (boto_clients, sqs.calls, sfn.calls, events.calls) == ([], [], [], [])
+    rows = {r["mcp_tool"]: r["service"] for r in res.json()["data"]["results"]}
+    assert rows["aws_provision_free_tier_resources"] == "AWS Free Tier Provisioner (dry run, nothing created)"
+
+
+def test_provisioning_and_config_writes_are_refused_over_mcp():
+    headers = _official_headers()
+    for tool, args in (("aws_provision_free_tier_resources", {"dry_run": False}),
+                       ("aws_queue_and_ssm_config", {"action": "update_param", "param_name": "x", "param_value": "1"})):
+        res = client.post("/api/mcp/execute", json={"tool_name": tool, "arguments": args}, headers=headers)
+        assert (res.status_code, res.json()["detail"]) == (403, "dispatch tools run only through HITL approval"), tool
+
+
 def test_cognito_role_is_case_insensitive():
     from app.aws import cognito_service
 
