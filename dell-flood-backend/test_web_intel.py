@@ -800,6 +800,30 @@ def test_failed_start_leaves_no_ghost_run():
     assert service.runner.wait(retried.run_id, 3).state is RunState.succeeded
 
 
+def test_cancelled_run_is_not_reused_by_dedupe():
+    gate = threading.Event()
+
+    def get(request):
+        gate.wait(5)
+        run_id = str(request.url).split("/v1/runs/")[1].split("?")[0]
+        return httpx.Response(200, json=run_body({"status": "success", "stations": [station()]}, run_id=run_id))
+
+    fake = FakeHTTP({**agent_routes({}, start_ids=["run_1", "run_2"]),
+                     f"GET {AGENT}/v1/runs/run_1": get, f"GET {AGENT}/v1/runs/run_2": get})
+    service = make_service(tinyfish=fake)
+    request = RunRequest(location=SIWAN, products=(ProductId.river_levels,))
+    first = service.runner.start(request)
+    deadline = time.time() + 5
+    while not fake.calls(f"GET {AGENT}/v1/runs/run_1") and time.time() < deadline:
+        time.sleep(0.01)
+    service.runner.cancel(first.run_id)
+    second = service.runner.start(request)
+    gate.set()
+    assert second.run_id != first.run_id
+    assert service.runner.wait(first.run_id, 10).state is RunState.cancelled
+    assert service.runner.wait(second.run_id, 10).state is RunState.succeeded
+
+
 def test_restart_marks_inflight_runs_interrupted():
     store = IntelStore(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
     now = datetime.now(timezone.utc)

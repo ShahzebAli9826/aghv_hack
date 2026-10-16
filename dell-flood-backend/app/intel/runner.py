@@ -620,9 +620,9 @@ class IntelRunner:
             self.store.save_run(run)
             return run
         with self._lock:
-            existing_id = self._inflight.get(request.key)
-            if existing_id and existing_id in self._active:
-                return self.snapshot(self._active[existing_id])
+            existing = self._active.get(self._inflight.get(request.key, ""))
+            if existing is not None and not existing.cancel_event.is_set():
+                return self.snapshot(existing)
             handle = _Handle(run=base, request=request)
             self._active[base.run_id] = handle
             self._inflight[request.key] = base.run_id
