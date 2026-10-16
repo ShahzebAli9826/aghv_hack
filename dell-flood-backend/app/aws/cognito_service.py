@@ -1,5 +1,7 @@
 import os
+import sys
 import time
+import secrets
 import logging
 from typing import Dict, Any, Optional
 import jwt
@@ -17,6 +19,17 @@ def _has_real_cognito_config() -> bool:
     return True
 
 
+def _load_fallback_secret() -> str:
+    secret = os.getenv("AWS_COGNITO_FALLBACK_SECRET", "").strip()
+    if secret:
+        return secret
+    print(
+        "[cognito] AWS_COGNITO_FALLBACK_SECRET is not set; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        file=sys.stderr,
+    )
+    return secrets.token_urlsafe(48)
+
+
 class CognitoAuthVerifier:
     """
     Amazon Cognito User Pool Integration for Aegis:
@@ -29,7 +42,7 @@ class CognitoAuthVerifier:
         self.region = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
         self.user_pool_id = os.getenv("AWS_COGNITO_USER_POOL_ID", "ap-south-1_AegisPool")
         self.client_id = os.getenv("AWS_COGNITO_APP_CLIENT_ID", "aegis-mobile-web-client")
-        self.jwt_secret = os.getenv("AWS_COGNITO_FALLBACK_SECRET", "aegis-cognito-oidc-hmac-secret-key-2026")
+        self.jwt_secret = _load_fallback_secret()
         self.enabled = _has_real_cognito_config()
         self._cognito = None
         if self.enabled:

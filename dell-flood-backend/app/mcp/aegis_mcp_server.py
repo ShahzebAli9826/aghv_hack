@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.agent.tools import (
     check_rainfall_detailed,
@@ -16,6 +16,7 @@ from app.agent.tools import (
     trigger_voice_call,
     generate_multilingual_voice_script,
 )
+from app.api.auth_deps import require_official
 from app.aws import (
     s3_service,
     dynamodb_service,
@@ -428,6 +429,10 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         "requires_official_approval": False,
     },
 ]
+
+
+HITL_ONLY_TOOLS = frozenset(t["name"] for t in MCP_TOOLS_REGISTRY if t["requires_official_approval"])
+HITL_ONLY_REFUSAL = "dispatch tools run only through HITL approval"
 
 
 def build_cap_v12_payload(
@@ -856,8 +861,10 @@ async def list_mcp_tools():
     }
 
 
-@mcp_router.post("/execute")
+@mcp_router.post("/execute", dependencies=[Depends(require_official)])
 async def http_execute_mcp_tool(req: MCPExecuteRequest):
+    if req.tool_name in HITL_ONLY_TOOLS:
+        raise HTTPException(status_code=403, detail=HITL_ONLY_REFUSAL)
     try:
         return execute_mcp_tool(req.tool_name, req.arguments, req.idempotency_key)
     except ValueError as ve:
@@ -914,6 +921,8 @@ def run_stdio_mcp_server():
             elif method == "tools/call":
                 t_name = params.get("name")
                 t_args = params.get("arguments", {})
+                if t_name in HITL_ONLY_TOOLS:
+                    raise PermissionError(HITL_ONLY_REFUSAL)
                 out = execute_mcp_tool(t_name, t_args)
                 res = {"content": [{"type": "text", "text": json.dumps(out)}]}
             else:

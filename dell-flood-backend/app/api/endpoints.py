@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, UploadFile, File, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -48,6 +48,7 @@ from app.api.auth_deps import (
     escape_html,
     slugify_location,
     normalize_and_validate_phone,
+    require_official,
 )
 
 router = APIRouter()
@@ -124,7 +125,7 @@ init_db()
 class RegisterRequest(BaseModel):
     username: str
     password: str
-    role: str
+    role: Optional[str] = None
     phone: str
     expo_push_token: Optional[str] = None
 
@@ -277,16 +278,16 @@ def register_user(payload: RegisterRequest):
         safe_phone = normalize_and_validate_phone(payload.phone)
         cursor.execute(
             "INSERT INTO users (username, password_hash, role, phone, expo_push_token) VALUES (?, ?, ?, ?, ?)",
-            (safe_username, hash_password_salted(payload.password), payload.role, safe_phone, payload.expo_push_token)
+            (safe_username, hash_password_salted(payload.password), "citizen", safe_phone, payload.expo_push_token)
         )
         conn.commit()
         cognito_bundle = {}
         try:
             from app.aws import cognito_service
-            cognito_bundle = cognito_service.issue_token(safe_username, payload.role or "Citizen")
+            cognito_bundle = cognito_service.issue_token(safe_username, "citizen")
         except Exception:
             pass
-        return {"status": "SUCCESS", "aws_cognito": cognito_bundle}
+        return {"status": "SUCCESS", "role": "citizen", "aws_cognito": cognito_bundle}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="Username exists.")
     finally:
@@ -321,7 +322,7 @@ def login_user(payload: LoginRequest):
     }
 
 # --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint (Defaults to +917678656930) ---
-@router.post("/alerts/voice")
+@router.post("/alerts/voice", dependencies=[Depends(require_official)])
 def trigger_voice_call(payload: VoiceCallRequest):
     loc = payload.location or "Patna District"
     sev = payload.severity or "CRITICAL"
@@ -349,12 +350,12 @@ def trigger_voice_call(payload: VoiceCallRequest):
     return res
 
 # --- Direct SMTP Email Endpoint ---
-@router.post("/alerts/email")
+@router.post("/alerts/email", dependencies=[Depends(require_official)])
 def trigger_email_alert(payload: EmailAlertRequest):
     return send_smtp_email(payload.to_email, payload.subject, payload.message)
 
 # --- LLM-Generated RAG Report SMTP Dispatch ---
-@router.post("/alerts/email-report")
+@router.post("/alerts/email-report", dependencies=[Depends(require_official)])
 def email_rag_report(payload: EmailReportRequest):
     try:
         report_text = rag_generator.generate_report(
@@ -968,7 +969,7 @@ def download_report(location: str, lat: float, lon: float, area: float, classifi
         headers=s3_headers,
     )
 
-@router.post("/notifications/broadcast")
+@router.post("/notifications/broadcast", dependencies=[Depends(require_official)])
 def broadcast_notification(payload: BroadcastNotificationRequest):
     # Fetch all tokens
     conn = sqlite3.connect(DB_PATH)
@@ -1896,7 +1897,7 @@ def resolve_complaint(payload: ResolveRequest):
 # --- 6-Agent LangGraph Supervisor Trace Routes (P26, P27, P28) ---
 @router.post("/agent-cycle")
 @router.post("/agent/trigger-cycle")
-def run_agent_cycle(payload: AgentCycleRequest):
+def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(require_official)):
     lat = payload.lat
     lon = payload.lon
     
@@ -2612,14 +2613,14 @@ class HITLApproveRequest(BaseModel):
     item_id: Any
     language: Optional[str] = "hi"
 
-@router.get("/hitl/queue")
+@router.get("/hitl/queue", dependencies=[Depends(require_official)])
 def list_hitl_queue(status: str = "PENDING"):
     fn = getattr(agent, "get_hitl_queue", None)
     items = fn(status=status) if callable(fn) else []
     return {"status": "SUCCESS", "items": items}
 
 @router.post("/hitl/approve")
-def approve_hitl_item(payload: HITLApproveRequest):
+def approve_hitl_item(payload: HITLApproveRequest, user: Dict[str, Any] = Depends(require_official)):
     fn = getattr(agent, "approve_hitl_action", None)
     if callable(fn):
         return fn(item_id=str(payload.item_id), language=payload.language or "hi")
@@ -2808,7 +2809,7 @@ def get_aws_cloudwatch_telemetry():
     return cloudwatch_service.get_dashboard_summary()
 
 
-@router.post("/alerts/broadcast-sns")
+@router.post("/alerts/broadcast-sns", dependencies=[Depends(require_official)])
 def trigger_sns_emergency_broadcast(payload: SNSBroadcastRequest):
     """Publishes a mass flood evacuation alert via Amazon SNS Topic."""
     from app.aws import sns_service
@@ -2821,7 +2822,7 @@ def trigger_sns_emergency_broadcast(payload: SNSBroadcastRequest):
     )
 
 
-@router.post("/alerts/voice-polly")
+@router.post("/alerts/voice-polly", dependencies=[Depends(require_official)])
 def trigger_polly_voice_synthesis(payload: PollySynthesizeRequest):
     """Synthesizes Hindi or English emergency voice audio using Amazon Polly Neural TTS."""
     from app.aws import polly_service
@@ -2840,7 +2841,7 @@ def list_dynamodb_ground_reports(limit: int = 50):
     return {"status": "SUCCESS", "count": len(items), "items": items}
 
 
-@router.post("/aws/test-mcp-suite")
+@router.post("/aws/test-mcp-suite", dependencies=[Depends(require_official)])
 def run_aws_free_tier_mcp_diagnostic_suite(
     location: str = "Patna District",
     lat: float = 25.6124,
@@ -2871,8 +2872,7 @@ def translate_advisory_aws(payload: AWSTranslateRequest):
     )
 
 
-@router.post("/aws/provision")
-@router.get("/aws/provision")
+@router.post("/aws/provision", dependencies=[Depends(require_official)])
 def provision_aws_free_tier_resources():
     """Idempotently creates or verifies all AWS Free Tier resources (S3, DynamoDB, SNS, SQS FIFO, SSM) when keys exist, or returns a simulation blueprint offline."""
     from app.aws import aws_provisioner
