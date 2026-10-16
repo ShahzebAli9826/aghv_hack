@@ -335,8 +335,8 @@ class MultiAgentIncidentOrchestrator:
             )
             nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
             logs.append(
-                f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script for "
-                f"{target_phone or 'no recipient (approval will not place a call)'}. "
+                f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script "
+                f"{'for the requested recipient' if target_phone else 'with no recipient (approval will not place a call)'}. "
                 f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
             )
 

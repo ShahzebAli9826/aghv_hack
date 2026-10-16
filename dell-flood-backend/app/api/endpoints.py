@@ -1944,7 +1944,7 @@ def run_agent_cycle(payload: AgentCycleRequest, user: Dict[str, Any] = Depends(r
         "rainfall_24h_mm": res.get("rainfall_24h_mm", 0.0),
     }
 
-@router.get("/agent-trace")
+@router.get("/agent-trace", dependencies=[Depends(require_official)])
 def get_agent_trace(location: str):
     if location in AGENT_TRACES:
         return AGENT_TRACES[location]

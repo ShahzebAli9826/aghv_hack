@@ -67,6 +67,7 @@ AGENT_CYCLE_BODY = {"location": "Patna District", "lat": 25.6124, "lon": 85.1376
 GATED_ROUTES = [
     ("post", "/api/hitl/approve", {"item_id": "hitl_00000000"}),
     ("get", "/api/hitl/queue", None),
+    ("get", "/api/agent-trace?location=Patna", None),
     ("post", "/api/agent-cycle", AGENT_CYCLE_BODY),
     ("post", "/api/agent/trigger-cycle", AGENT_CYCLE_BODY),
     ("post", "/api/aws/provision", None),
