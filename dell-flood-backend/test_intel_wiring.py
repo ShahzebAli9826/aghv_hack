@@ -354,6 +354,43 @@ def test_cycle_report_and_pdf_carry_the_official_sources_section():
     assert "https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=1" in text.replace("\n", "")
 
 
+def _mcp(headers, tool, arguments):
+    return client.post("/api/mcp/execute", json={"tool_name": tool, "arguments": arguments}, headers=headers)
+
+
+def test_mcp_web_intel_tools_write_provenance():
+    _fresh_env()
+    headers = _official_headers()
+    assert _mcp(None, "web_intel_start_run", {"location": "Patna", "lat": 25.6, "lon": 85.1}).status_code == 401
+    bad = _mcp(headers, "web_intel_start_run", {"location": "Patna", "lat": 125.6, "lon": 85.1})
+    assert (bad.status_code, bad.json()["detail"]) == (422, "lat: Input should be less than or equal to 90")
+
+    started = _mcp(headers, "web_intel_start_run", {"location": "Patna, Bihar", "lat": 25.6124, "lon": 85.1376,
+                                                      "state": "Bihar", "district": "Patna"})
+    assert started.status_code == 200, started.text
+    run_id = started.json()["data"]["run_id"]
+    assert started.json()["provenance"]["web_intel"]["run_id"] == run_id
+    deadline = time.time() + 30
+    while True:
+        got = _mcp(headers, "web_intel_get_run", {"run_id": run_id})
+        assert got.status_code == 200, got.text
+        if got.json()["data"]["state"] not in ("queued", "running") or time.time() > deadline:
+            break
+        time.sleep(0.1)
+    run = got.json()["data"]
+    meta = got.json()["provenance"]["web_intel"]
+    assert run["state"] in ("succeeded", "partial") and "live_view" not in run
+    assert (meta["run_id"], meta["state"], meta["tinyfish_run_ids"], meta["estimated_cost_usd"]) == (
+        run_id, run["state"], run["agent_metadata"]["tinyfish_run_ids"], run["agent_metadata"]["estimated_cost_usd"])
+    assert run["evidence"] and all(e["mock"] for e in run["evidence"])
+
+    latest = _mcp(headers, "web_intel_latest_evidence", {"district": "Patna"})
+    assert (latest.json()["data"]["status"], latest.json()["provenance"]["web_intel"]["run_id"]) == ("ATTACHED", run_id)
+    ledger = client.get("/api/mcp/provenance").json()["ledger"]
+    assert [e["tool_name"] for e in ledger[:2]] == ["web_intel_latest_evidence", "web_intel_get_run"]
+    assert ledger[1]["web_intel"] == meta
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

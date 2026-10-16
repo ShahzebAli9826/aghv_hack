@@ -18,6 +18,7 @@ from app.agent.tools import (
     generate_multilingual_voice_script,
 )
 from app.api.auth_deps import require_official
+from app.mcp.web_intel_tools import WEB_INTEL_REGISTRY, WEB_INTEL_TOOLS, MCPToolInputError
 from app.aws import (
     s3_service,
     dynamodb_service,
@@ -430,6 +431,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         },
         "requires_official_approval": False,
     },
+    *WEB_INTEL_REGISTRY,
 ]
 
 
@@ -529,11 +531,15 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         return _IDEMPOTENCY_CACHE[idempotency_key]
 
     t0 = time.perf_counter()
+    web_intel_meta: Optional[Dict[str, Any]] = None
     lat = float(arguments.get("lat", 25.5941))
     lon = float(arguments.get("lon", 85.1376))
     location = str(arguments.get("location", arguments.get("query", "Patna, Bihar")))
 
-    if tool_name == "geocode_location":
+    if tool_name in WEB_INTEL_TOOLS:
+        data, web_intel_meta = WEB_INTEL_TOOLS[tool_name](arguments)
+
+    elif tool_name == "geocode_location":
         import requests as req
         q = str(arguments.get("query", "Patna"))
         data = {"query": q, "lat": 25.5941, "lon": 85.1376, "source": "Open-Meteo Geocoding"}
@@ -850,6 +856,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         "sha256_hash": sha256_hash,
         "sha256_signature": sha256_hash,
     }
+    if web_intel_meta:
+        provenance["web_intel"] = web_intel_meta
     envelope = {"status": "SUCCESS", "tool_name": tool_name, "data": data, "provenance": provenance}
 
     _MCP_PROVENANCE_LEDGER.insert(0, provenance)
@@ -884,6 +892,8 @@ async def http_execute_mcp_tool(req: MCPExecuteRequest):
         raise HTTPException(status_code=403, detail=HITL_ONLY_REFUSAL)
     try:
         return execute_mcp_tool(req.tool_name, req.arguments, req.idempotency_key)
+    except MCPToolInputError as bad:
+        raise HTTPException(status_code=422, detail=str(bad))
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
