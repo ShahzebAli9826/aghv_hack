@@ -360,6 +360,19 @@ def test_cancel_while_waiting_for_an_agent_slot():
     assert len(fake.calls(f"POST {AGENT}/v1/automation/run-async")) == 1
 
 
+def test_poll_error_cancels_remote_run_before_retry():
+    ok = run_body({"status": "success", "stations": [station()]}, run_id="run_2")
+    fake = FakeHTTP({
+        **agent_routes({"run_2": ok}, start_ids=["run_1", "run_2"]),
+        f"GET {AGENT}/v1/runs/run_1": httpx.Response(500, json={"error": {"code": "INTERNAL", "message": "m"}}),
+        f"POST {AGENT}/v1/runs/run_1/cancel": httpx.Response(200, json={"run_id": "run_1", "status": "CANCELLED"}),
+    })
+    run = run_and_wait(make_service(tinyfish=fake), [ProductId.river_levels])
+    assert run.state is RunState.succeeded
+    assert [r["url"] for r in fake.requests if r["method"] == "POST"] == [
+        f"{AGENT}/v1/automation/run-async", f"{AGENT}/v1/runs/run_1/cancel", f"{AGENT}/v1/automation/run-async"]
+
+
 def test_budget_guard_refuses_new_runs():
     ledger = CostLedger(0.05, 0.016)
     assert ledger.reserve(30) == 3

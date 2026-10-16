@@ -430,7 +430,6 @@ class TinyFishClient:
                         if event.type == "COMPLETE":
                             break
                         if cancel_event is not None and cancel_event.is_set() and run_id:
-                            self.cancel_run(run_id)
                             raise TinyFishCancelled("cancelled", run_id=run_id)
                     if not run_id:
                         raise TinyFishServerError("run-sse stream ended without a run_id")
@@ -440,10 +439,21 @@ class TinyFishClient:
                         on_started(run_id)
                 run = self._poll(run_id, cancel_event)
                 return run
+            except BaseException:
+                if run_id is not None and run is None:
+                    self._cancel_quietly(run_id)
+                raise
             finally:
                 ledger.settle(steps, run.num_of_steps if run is not None else None)
         finally:
             self._agent_slots.release()
+
+    def _cancel_quietly(self, run_id: str) -> None:
+        """Stop a remote run we are abandoning, so it stops billing and a retry is not a second live run."""
+        try:
+            self.cancel_run(run_id)
+        except TinyFishError as exc:
+            log.warning("tinyfish cancel of an abandoned run failed: %s", type(exc).__name__)
 
     def _poll(self, run_id: str, cancel_event: threading.Event | None) -> AgentRun:
         deadline = self._clock() + self._settings.run_timeout_s
@@ -452,10 +462,8 @@ class TinyFishClient:
             if run.terminal:
                 return run
             if cancel_event is not None and cancel_event.is_set():
-                self.cancel_run(run_id)
                 raise TinyFishCancelled("cancelled", run_id=run_id)
             if self._clock() >= deadline:
-                self.cancel_run(run_id)
                 raise TinyFishTimeout(f"run exceeded {self._settings.run_timeout_s:.0f}s", run_id=run_id)
             self._sleep(self._settings.poll_interval_s)
 
