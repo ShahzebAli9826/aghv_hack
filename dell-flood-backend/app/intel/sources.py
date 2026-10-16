@@ -79,6 +79,12 @@ class Source:
     def in_season(self, day: date) -> bool:
         return self.season is None or self.season.contains(day)
 
+    @property
+    def monitorable(self) -> bool:
+        """A Page monitor fetches start_url without a browser agent or our own API keys."""
+        return (self.start_url is not None and self.requires_setting is None
+                and self.access in (AccessMethod.fetch, AccessMethod.rss))
+
 
 def _src(**kw) -> Source:
     kw["jurisdictions"] = frozenset(kw["jurisdictions"])

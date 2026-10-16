@@ -124,6 +124,7 @@ def _describe_products(today: date) -> list[dict]:
                 "source_type": s.source_type.value, "jurisdictions": sorted(s.jurisdictions),
                 "verified": s.verified, "in_season": s.in_season(today),
                 "allow_readonly_lookup": s.allow_readonly_lookup, "notes": s.notes,
+                "start_url": s.start_url, "monitorable": s.monitorable,
             }
             for s in (SOURCES[sid] for sid in product.source_ids)
         ]

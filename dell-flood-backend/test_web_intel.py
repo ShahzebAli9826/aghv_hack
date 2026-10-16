@@ -917,6 +917,18 @@ def test_routes_contract_validation_and_idempotency():
     products = client.get(f"{base}/products").json()["products"]
     fmisc = next(s for p in products for s in p["sources"] if s["id"] == "fmisc_bihar")
     assert (fmisc["verified"], fmisc["in_season"]) == (True, False)
+    listed = {s["id"]: (s["start_url"], s["monitorable"]) for p in products for s in p["sources"]}
+    assert [listed[i] for i in ("ndma_contact", "sachet_bihar", "cwc_ffs", "imd_api", "news_search")] == [
+        ("https://ndma.gov.in/en/contact-us", True),
+        ("https://sachet.ndma.gov.in/cap_public_website/rss/rss_bihar.xml", True),
+        ("https://ffs.india-water.gov.in/", False),
+        ("https://api.imd.gov.in/api/v1/districtwarning", False),
+        (None, False),
+    ]
+    agent_page = client.post(f"{base}/monitors", json={
+        "kind": "page", "source_id": "cwc_ffs", "location": "Siwan", "lat": 26.22, "lon": 84.36})
+    assert (agent_page.status_code, agent_page.json()["detail"]) == (
+        422, "page monitors need a registry source whose start_url a fetch can read")
 
     body = {"location": "Siwan", "lat": 26.22, "lon": 84.36, "state": "Bihar", "district": "Siwan",
             "products": ["river_levels"]}

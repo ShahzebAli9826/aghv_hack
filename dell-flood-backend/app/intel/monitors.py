@@ -106,8 +106,8 @@ class MonitorService:
             raise MonitorRequestError(f"TinyFish allows at most {MAX_MONITORS} monitors per account")
         if kind is MonitorKind.page:
             source = SOURCES.get(source_id or "")
-            if source is None or not source.start_url:
-                raise MonitorRequestError("page monitors need a registry source_id with a start_url")
+            if source is None or not source.monitorable:
+                raise MonitorRequestError("page monitors need a registry source whose start_url a fetch can read")
             if url_rejection(source.start_url, source.domains) is not None:
                 raise MonitorRequestError("source start_url is not allowlisted")
             if not source.verified and not self._settings.allow_unverified_sources:
