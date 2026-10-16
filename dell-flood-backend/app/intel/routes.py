@@ -279,17 +279,25 @@ def delete_monitor(monitor_id: str, _: dict = Official, service: IntelService = 
 @intel_router.post("/webhook")
 async def webhook(request: Request, token: str | None = Query(default=None, max_length=200),
                   service: IntelService = Depends(get_service)) -> dict:
-    raw = await request.body()
-    if len(raw) > MAX_WEBHOOK_BYTES:
-        raise HTTPException(status_code=413, detail="payload too large")
     try:
-        payload = json.loads(raw or b"null")
+        service.monitors.authorize_webhook(token)
+    except WebhookUnauthorized:
+        raise HTTPException(status_code=401, detail="invalid webhook token") from None
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="payload too large")
+        chunks.append(chunk)
+    try:
+        payload = json.loads(b"".join(chunks) or b"null")
     except ValueError:
         payload = None
     try:
-        return service.monitors.handle_webhook(payload, token)
-    except WebhookUnauthorized:
-        raise HTTPException(status_code=401, detail="invalid webhook token") from None
+        return service.monitors.handle_webhook(payload)
     except MonitorUnavailable as exc:
         return {"status": "ignored", "reason": str(exc)}
     except TinyFishError as exc:

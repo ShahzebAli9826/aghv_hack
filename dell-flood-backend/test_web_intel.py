@@ -3,6 +3,7 @@
 Run: python -m pytest test_web_intel.py -q    or    python test_web_intel.py
 """
 import ast
+import asyncio
 import dataclasses
 import json
 import logging
@@ -153,12 +154,42 @@ def run_and_wait(service, products, location=SIWAN, stream=False) -> WebIntelRun
     return service.runner.wait(run.run_id, 20)
 
 
-def api(service) -> TestClient:
+def api_app(service) -> FastAPI:
     app = FastAPI()
     app.include_router(intel_router)
     app.dependency_overrides[require_official] = lambda: {"username": "tester", "role": "official"}
     app.dependency_overrides[get_service] = lambda: service
-    return TestClient(app)
+    return app
+
+
+def api(service) -> TestClient:
+    return TestClient(api_app(service))
+
+
+def asgi_post(app, target: str, chunks: list, headers: tuple = ()) -> tuple[int, int]:
+    """POST through raw ASGI, feeding the body one chunk per receive(). Returns (status, chunks read).
+
+    TestClient reads a streamed request body in full on the first receive(), so it cannot show
+    how much of a body the server consumed.
+    """
+    path, _, query = target.partition("?")
+    read, sent = [], []
+
+    async def receive():
+        if len(read) < len(chunks):
+            read.append(1)
+            return {"type": "http.request", "body": chunks[len(read) - 1], "more_body": len(read) < len(chunks)}
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+             "path": path, "raw_path": path.encode(), "root_path": "", "query_string": query.encode(),
+             "headers": [(k.lower().encode(), v.encode()) for k, v in headers],
+             "client": ("testclient", 50000), "server": ("testserver", 80)}
+    asyncio.run(app(scope, receive, send))
+    return next(m["status"] for m in sent if m["type"] == "http.response.start"), len(read)
 
 
 def fail_reasons(run: WebIntelRun) -> dict:
@@ -774,6 +805,16 @@ def test_webhook_token_dedupe_and_refetch():
         "status": "ignored", "reason": "unknown monitor"}
     assert len(fake.calls(f"GET {AGENT}/v1/monitors/mon_1")) == 2
     service.runner.wait(changed["run_id"], 10)
+
+
+def test_webhook_checks_token_and_size_before_buffering():
+    app = api_app(make_service())
+    hook = "/api/agent/web-intelligence/webhook"
+    big = [b"x" * 100_000] * 50
+    assert asgi_post(app, f"{hook}?token=wrong", big) == (401, 0)
+    assert asgi_post(app, f"{hook}?token={WEBHOOK_TOKEN}", big) == (413, 11)
+    assert asgi_post(app, f"{hook}?token={WEBHOOK_TOKEN}", [b"{}"], (("Content-Length", "2000000"),)) == (413, 0)
+    assert asgi_post(app, f"{hook}?token={WEBHOOK_TOKEN}", [b'{"x"', b": 1}"]) == (200, 2)
 
 
 class MonitorSaveFails(IntelStore):

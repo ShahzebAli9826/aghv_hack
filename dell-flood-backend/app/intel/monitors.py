@@ -164,10 +164,13 @@ class MonitorService:
                 raise
         return self._store.delete_monitor(monitor_id)
 
-    def handle_webhook(self, payload: object, token: str | None) -> dict:
+    def authorize_webhook(self, token: str | None) -> None:
         expected = self._settings.webhook_token
         if not expected or not token or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
             raise WebhookUnauthorized("bad webhook token")
+
+    def handle_webhook(self, payload: object) -> dict:
+        """Act on a webhook body. The caller must have passed authorize_webhook first."""
         if not isinstance(payload, dict):
             return {"status": "ignored", "reason": "unrecognised payload"}
         monitor_id = payload.get("fetch_monitor_id") or payload.get("search_monitor_id")
