@@ -254,8 +254,9 @@ def _normalize_monitor(body: dict) -> Monitor:
 # --- cost ---
 
 class CostLedger:
-    """Per-request budget. Steps are reserved before a run starts, so concurrent
-    runs can never overspend; the reservation is settled with the real step count."""
+    """Per-request budget. Steps are reserved before a run starts and each run is capped
+    at its reservation; settling records the real step count, so a run that exceeds
+    its cap still counts in full and marks the ledger over budget."""
 
     def __init__(self, max_usd: float, usd_per_step: float):
         self.max_usd = max_usd
@@ -267,11 +268,8 @@ class CostLedger:
 
     def reserve(self, wanted_steps: int) -> int:
         with self._lock:
-            if self.usd_per_step <= 0:
-                steps = wanted_steps
-            else:
-                committed = (self._spent_steps + self._reserved_steps) * self.usd_per_step
-                steps = min(wanted_steps, math.floor((self.max_usd - committed) / self.usd_per_step + 1e-9))
+            committed = (self._spent_steps + self._reserved_steps) * self.usd_per_step
+            steps = min(wanted_steps, math.floor((self.max_usd - committed) / self.usd_per_step + 1e-9))
             if steps < 1:
                 raise BudgetExceeded(f"budget of ${self.max_usd:.2f} for this request is exhausted")
             self._reserved_steps += steps
@@ -282,11 +280,15 @@ class CostLedger:
             self._reserved_steps -= reserved
             if actual is None:
                 self._unknown_steps = True
-            self._spent_steps += reserved if actual is None else min(actual, reserved)
+            self._spent_steps += reserved if actual is None else actual
 
     @property
     def steps(self) -> int:
         return self._spent_steps
+
+    @property
+    def over_budget(self) -> bool:
+        return self._spent_steps * self.usd_per_step > self.max_usd + 1e-9
 
     @property
     def spent_usd(self) -> float:

@@ -322,6 +322,27 @@ def test_third_agent_run_waits_while_two_are_in_flight():
     assert ledger.steps == 3
 
 
+def test_ledger_counts_overspend_and_flags_it():
+    ledger = CostLedger(0.05, 0.016)
+    assert ledger.reserve(3) == 3
+    ledger.settle(3, 5)
+    assert (ledger.steps, ledger.spent_usd, ledger.over_budget) == (5, 0.08, True)
+
+    over = run_body({"status": "success", "stations": [station()]}, run_id="run_1", steps=5)
+    service = make_service(make_settings(max_usd_per_request=0.02), tinyfish=FakeHTTP(agent_routes({"run_1": over})))
+    run = run_and_wait(service, [ProductId.river_levels])
+    assert (run.agent_metadata.estimated_cost_usd, run.agent_metadata.num_of_steps) == (0.08, 5)
+    assert "over_budget" in run.data_quality
+
+
+def test_non_finite_or_non_positive_prices_fall_back_to_default():
+    for raw in ("0", "-1", "nan", "inf", "abc"):
+        assert load_settings({"TINYFISH_USD_PER_STEP": raw}).usd_per_step == 0.016, raw
+    assert load_settings({"TINYFISH_USD_PER_STEP": "0.02"}).usd_per_step == 0.02
+    assert load_settings({"TINYFISH_MAX_USD_PER_REQUEST": "nan"}).max_usd_per_request == 0.50
+    assert load_settings({"TINYFISH_RUN_TIMEOUT_S": "inf"}).run_timeout_s == 180.0
+
+
 def test_cancel_while_waiting_for_an_agent_slot():
     release = threading.Event()
 

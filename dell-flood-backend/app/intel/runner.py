@@ -536,6 +536,8 @@ def compose(handle: _Handle, *, state: RunState, mock: bool, finished_at: dateti
     if any(e.validation_status.value == "rejected" for e in evidence):
         data_quality.append("rejected_items_present")
     ledger = handle.ledger
+    if ledger is not None and not mock and ledger.over_budget:
+        data_quality.append("over_budget")
     live_view = handle.live_view if state is RunState.running else None
     return handle.run.model_copy(update={
         "state": state,
