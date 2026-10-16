@@ -34,7 +34,7 @@ from app.aegis.pipeline.impact_analyzer import (
 )
 from app.aegis.routing.dynamic_router import DynamicEvacuationRouter
 from app.agent.flood_agent import FloodAgent
-from app.agent.incident_orchestrator import HitlDraftNotFound, HitlDraftNotPending, REPORT_SEVERITY_WEIGHTS
+from app.agent.incident_orchestrator import HitlDispatchFailed, HitlDraftNotFound, HitlDraftNotPending, REPORT_SEVERITY_WEIGHTS
 from app.agent.tools import (
     check_rainfall,
     check_gauge,
@@ -339,15 +339,13 @@ def trigger_voice_call(payload: VoiceCallRequest):
         language=lang,
         max_depth_m=depth,
     )
+    # A single-recipient call must not fan out to the SNS topic; broadcasts go through HITL approval only.
     try:
-        from app.aws import polly_service, sns_service
+        from app.aws import polly_service
         tts_lang = "hi-IN" if str(lang).lower().startswith("hi") else "en-IN"
         script_txt = res.get("script_text") or payload.message or f"Emergency flood alert for {loc}. Projected depth {depth:.2f}m."
-        polly_res = polly_service.synthesize_emergency_alert(script_txt, language=tts_lang)
-        sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=depth)
         if isinstance(res, dict):
-            res["aws_polly"] = polly_res
-            res["aws_sns"] = sns_res
+            res["aws_polly"] = polly_service.synthesize_emergency_alert(script_txt, language=tts_lang)
     except Exception:
         pass
     return res
@@ -2634,6 +2632,8 @@ def approve_hitl_item(payload: HITLApproveRequest, user: Dict[str, Any] = Depend
         raise HTTPException(status_code=404, detail=str(exc))
     except HitlDraftNotPending as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except HitlDispatchFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 @router.get("/alerts/cap")
 def get_cap_alert_for_location(

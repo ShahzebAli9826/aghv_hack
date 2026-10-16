@@ -129,6 +129,49 @@ class _SnsRecorder:
         del sns_service.broadcast_flood_warning
 
 
+class _PollyRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def __enter__(self):
+        from app.aws import polly_service
+        self.module = polly_service
+        polly_service.synthesize_emergency_alert = lambda *a, **k: self.calls.append((a, k)) or {"status": "RECORDED"}
+        return self
+
+    def __exit__(self, *exc):
+        del self.module.synthesize_emergency_alert
+
+
+class _VoiceGateway:
+    """Replaces the voice-call function the MCP dispatcher uses; raises when told to."""
+
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+
+    def __enter__(self):
+        from app.mcp import aegis_mcp_server
+        self.module = aegis_mcp_server
+        self.saved = aegis_mcp_server.trigger_voice_call
+
+        def fake(**kwargs):
+            self.calls.append(kwargs)
+            if self.error:
+                raise self.error
+            return {"status": "SUCCESS", "mode": "simulated_gateway", "target": kwargs["phone_number"]}
+
+        aegis_mcp_server.trigger_voice_call = fake
+        return self
+
+    def __exit__(self, *exc):
+        self.module.trigger_voice_call = self.saved
+
+
+def _draft_row(draft_id):
+    return next(r for r in incident_orchestrator.MultiAgentIncidentOrchestrator.list_hitl_queue() if r["draft_id"] == draft_id)
+
+
 def _pending_draft_ids(headers):
     res = client.get("/api/hitl/queue", headers=headers)
     assert res.status_code == 200, res.text
@@ -310,14 +353,16 @@ def test_invalid_recipient_places_no_call():
     assert voice.status_code == 400
     assert voice.json()["detail"] == "phone_number is missing or not a valid E.164 number; no call was placed."
 
-    with _ModelProbability(0.95), _SnsRecorder():
+    with _ModelProbability(0.95), _SnsRecorder() as sns, _PollyRecorder() as polly:
         draft_id = endpoints.agent.run_cycle(
             location="Phase0 No Recipient Ward", lat=25.6124, lon=85.1376, phones=["not-a-phone"], language="en",
         )["hitl_draft_id"]
         assert _pending_draft_ids(headers)[draft_id]["target_phones"] == []
+        cycle_polly = len(polly.calls)
         approved = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
     assert approved.status_code == 200, approved.text
     assert (approved.json()["status"], approved.json()["dispatch_receipt"]["status"]) == ("APPROVED_NO_RECIPIENT", "NO_RECIPIENT")
+    assert (sns.calls, len(polly.calls) - cycle_polly) == ([], 0)
 
 
 def _source_files_containing(top, needle):
@@ -434,6 +479,119 @@ def test_cors_default_has_no_wildcard():
         headers={"Origin": "http://localhost:8081", "Access-Control-Request-Method": "GET"},
     )
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:8081"
+
+
+def test_dispatch_failure_is_recorded_and_can_be_retried():
+    headers = _official_headers()
+    with _ModelProbability(0.95), _SnsRecorder() as sns:
+        draft_id = endpoints.agent.run_cycle(
+            location="Phase0 Failing Gateway", lat=25.6124, lon=85.1376, phones=["+15555550123"], language="en",
+        )["hitl_draft_id"]
+        with _VoiceGateway(RuntimeError("Twilio gateway timeout")):
+            failed = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        assert failed.status_code == 502, failed.text
+        assert failed.json()["detail"] == (
+            f"HITL draft {draft_id} was approved but dispatch failed (RuntimeError: Twilio gateway timeout); "
+            "it is DISPATCH_FAILED and can be approved again to retry."
+        )
+        row = _draft_row(draft_id)
+        assert (row["status"], row["approved_by"], row["dispatch_error"]) == (
+            "DISPATCH_FAILED", "saif", "RuntimeError: Twilio gateway timeout")
+        assert sns.calls == []
+
+        with _VoiceGateway() as gateway:
+            retried = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        assert retried.status_code == 200, retried.text
+        assert (retried.json()["status"], retried.json()["dispatch_receipt"]["target"]) == ("APPROVED_AND_DISPATCHED", "+15555550123")
+        assert [c["phone_number"] for c in gateway.calls] == ["+15555550123"]
+        assert _draft_row(draft_id)["dispatch_error"] is None
+        assert len(sns.calls) == 1
+        again = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        assert again.status_code == 409
+
+
+class _RacingConnection:
+    """sqlite3 shim: another approver wins the draft just before this connection's first UPDATE."""
+
+    def __init__(self, real_sqlite3, draft_id):
+        self.real = real_sqlite3
+        self.draft_id = draft_id
+        self.raced = False
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    def connect(self, *args, **kwargs):
+        shim = self
+        conn = self.real.connect(*args, **kwargs)
+
+        def race(sql):
+            if not shim.raced and sql.lstrip().upper().startswith("UPDATE HITL_APPROVALS"):
+                shim.raced = True
+                other = shim.real.connect(incident_orchestrator.DB_PATH)
+                other.execute("UPDATE hitl_approvals SET status = 'APPROVED_AND_DISPATCHED', approved_by = 'rival' WHERE draft_id = ?",
+                              (shim.draft_id,))
+                other.commit()
+                other.close()
+
+        class Cursor:
+            def __init__(self, cur):
+                self._cur = cur
+
+            def __getattr__(self, name):
+                return getattr(self._cur, name)
+
+            def execute(self, sql, *params):
+                race(sql)
+                return self._cur.execute(sql, *params)
+
+        class Conn:
+            def __getattr__(self, name):
+                return getattr(conn, name)
+
+            def __setattr__(self, name, value):
+                setattr(conn, name, value)
+
+            def cursor(self):
+                return Cursor(conn.cursor())
+
+            def execute(self, sql, *params):
+                race(sql)
+                return conn.execute(sql, *params)
+
+            def __enter__(self):
+                return conn.__enter__()
+
+            def __exit__(self, *exc):
+                return conn.__exit__(*exc)
+
+        return Conn()
+
+
+def test_lost_approval_race_reports_the_winning_status():
+    headers = _official_headers()
+    with _ModelProbability(0.95), _SnsRecorder():
+        draft_id = endpoints.agent.run_cycle(
+            location="Phase0 Race Ward", lat=25.6124, lon=85.1376, phones=["+15555550123"], language="en",
+        )["hitl_draft_id"]
+        saved = incident_orchestrator.sqlite3
+        incident_orchestrator.sqlite3 = _RacingConnection(saved, draft_id)
+        try:
+            with _VoiceGateway() as gateway:
+                lost = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        finally:
+            incident_orchestrator.sqlite3 = saved
+    assert lost.status_code == 409, lost.text
+    assert lost.json()["detail"] == f"HITL draft {draft_id} is APPROVED_AND_DISPATCHED, not PENDING_OFFICIAL_APPROVAL"
+    assert gateway.calls == []
+
+
+def test_single_recipient_voice_call_does_not_broadcast():
+    with _SnsRecorder() as sns, _VoiceGateway():
+        res = client.post("/api/alerts/voice", json={"phone_number": "+15555550123", "location": "Patna"},
+                          headers=_official_headers())
+    assert res.status_code == 200, res.text
+    assert sns.calls == []
 
 
 if __name__ == "__main__":

@@ -11,11 +11,17 @@ from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
 from app.RAG.generator import SituationReportGenerator, format_official_sources
 from app.api.auth_deps import normalize_and_validate_phone
 from app.agent import web_evidence
+from app.aws import sns_service, polly_service
 
 DB_PATH = os.getenv("AEGIS_APP_DB") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
+# HITL lifecycle: PENDING -> DISPATCHING (atomic claim) -> APPROVED_AND_DISPATCHED | APPROVED_NO_RECIPIENT | DISPATCH_FAILED.
+# DISPATCH_FAILED can be claimed again by an explicit re-approval; nothing retries on its own.
 HITL_PENDING = "PENDING_OFFICIAL_APPROVAL"
+HITL_DISPATCHING = "APPROVED_DISPATCHING"
 HITL_APPROVED = "APPROVED_AND_DISPATCHED"
 HITL_APPROVED_NO_RECIPIENT = "APPROVED_NO_RECIPIENT"
+HITL_DISPATCH_FAILED = "DISPATCH_FAILED"
+HITL_CLAIMABLE = (HITL_PENDING, HITL_DISPATCH_FAILED)
 
 ESCALATION_TIERS = ("NONE", "YELLOW", "ORANGE", "RED")
 SEVERITY_BY_TIER = {"NONE": "LOW", "YELLOW": "MODERATE", "ORANGE": "HIGH", "RED": "CRITICAL"}
@@ -67,19 +73,36 @@ def nearby_report_severity(lat: float, lon: float) -> Dict[str, Any]:
     }
 
 
-def _parse_evidence(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+def _parse_json(raw: Optional[str]) -> Optional[Dict[str, Any]]:
     if not raw:
         return None
     try:
         return json.loads(raw)
     except ValueError:
-        return {"status": "UNREADABLE", "evidence": []}
+        return {"status": "UNREADABLE"}
+
+
+def _row_view(row: sqlite3.Row) -> Dict[str, Any]:
+    view = dict(row)
+    view["web_evidence"] = _parse_json(view.pop("evidence_json", None))
+    view["dispatch_receipt"] = _parse_json(view.get("dispatch_receipt"))
+    return view
 
 
 class HitlDraftNotFound(LookupError):
     def __init__(self, draft_id: str):
         super().__init__(f"HITL draft {draft_id} does not exist")
         self.draft_id = draft_id
+
+
+class HitlDispatchFailed(RuntimeError):
+    def __init__(self, draft_id: str, error: str):
+        super().__init__(
+            f"HITL draft {draft_id} was approved but dispatch failed ({error}); "
+            f"it is {HITL_DISPATCH_FAILED} and can be approved again to retry."
+        )
+        self.draft_id = draft_id
+        self.error = error
 
 
 class HitlDraftNotPending(RuntimeError):
@@ -89,7 +112,12 @@ class HitlDraftNotPending(RuntimeError):
         self.status = status
 
 
-HITL_ADDED_COLUMNS = (("evidence_json", "TEXT"),)
+HITL_ADDED_COLUMNS = (
+    ("evidence_json", "TEXT"),
+    ("dispatch_receipt", "TEXT"),
+    ("dispatch_error", "TEXT"),
+    ("dispatched_at", "REAL"),
+)
 
 
 def _init_orchestrator_tables():
@@ -523,10 +551,8 @@ class MultiAgentIncidentOrchestrator:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("SELECT * FROM hitl_approvals ORDER BY created_at DESC LIMIT 20")
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = [_row_view(r) for r in cur.fetchall()]
             conn.close()
-            for row in rows:
-                row["web_evidence"] = _parse_evidence(row.pop("evidence_json", None))
             return rows
         except Exception:
             return []
@@ -537,49 +563,83 @@ class MultiAgentIncidentOrchestrator:
         approved_by: str,
         language: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Moves a pending draft to approved exactly once, then dispatches it. Raises HitlDraftNotFound / HitlDraftNotPending."""
+        """Claims a pending (or failed) draft atomically, dispatches it once, and records the outcome.
+
+        Raises HitlDraftNotFound, HitlDraftNotPending (someone else holds or finished it), or
+        HitlDispatchFailed (the draft is left DISPATCH_FAILED and may be approved again).
+        """
+        approved_at = time.time()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         try:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,))
-            row = cur.fetchone()
-            if row is None:
-                raise HitlDraftNotFound(draft_id)
-            target_phone = normalize_and_validate_phone(row["target_phone"])
-            new_status = HITL_APPROVED if target_phone else HITL_APPROVED_NO_RECIPIENT
-            approved_at = time.time()
-            cur.execute(
-                "UPDATE hitl_approvals SET status = ?, approved_by = ?, approved_at = ? WHERE draft_id = ? AND status = ?",
-                (new_status, approved_by, approved_at, draft_id, HITL_PENDING),
+            claimed = conn.execute(
+                f"UPDATE hitl_approvals SET status = ?, approved_by = ?, approved_at = ?, dispatch_error = NULL "
+                f"WHERE draft_id = ? AND status IN ({','.join('?' * len(HITL_CLAIMABLE))})",
+                (HITL_DISPATCHING, approved_by, approved_at, draft_id, *HITL_CLAIMABLE),
+            ).rowcount == 1
+            conn.commit()
+            row = conn.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise HitlDraftNotFound(draft_id)
+        if not claimed:
+            raise HitlDraftNotPending(draft_id, row["status"])
+
+        draft = _row_view(row)
+        lang = language or draft["language"]
+        target_phone = normalize_and_validate_phone(draft["target_phone"])
+        aws_dispatch: Dict[str, Any] = {}
+        error: Optional[str] = None
+        if target_phone is None:
+            print(f"[HITL] Draft {draft_id} approved by {approved_by} has no valid recipient; nothing was sent.")
+            status = HITL_APPROVED_NO_RECIPIENT
+            receipt: Dict[str, Any] = {"status": "NO_RECIPIENT", "detail": "Draft has no valid recipient phone number; nothing was sent."}
+        else:
+            receipt = {}
+            try:
+                receipt = execute_mcp_tool(
+                    "dispatch_approved_alert",
+                    {
+                        "phone_number": target_phone,
+                        "location": draft["location"],
+                        "severity": draft["severity"],
+                        "language": lang,
+                        "max_depth_m": draft["max_depth_m"],
+                    },
+                )["data"]
+                aws_dispatch["sns"] = sns_service.broadcast_flood_warning(
+                    location=draft["location"], severity_level=draft["severity"], water_depth_m=draft["max_depth_m"],
+                )
+                aws_dispatch["polly"] = polly_service.synthesize_emergency_alert(
+                    f"HITL Approved Emergency Alert for {draft['location']}. Severity: {draft['severity']}.",
+                    language="hi-IN" if str(lang).lower().startswith("hi") else "en-IN",
+                )
+                status = HITL_APPROVED
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"[:300]
+                status = HITL_DISPATCH_FAILED
+                receipt = {"status": HITL_DISPATCH_FAILED, "error": error, "partial": {"voice": receipt, **aws_dispatch}}
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute(
+                "UPDATE hitl_approvals SET status = ?, dispatch_receipt = ?, dispatch_error = ?, dispatched_at = ? "
+                "WHERE draft_id = ? AND status = ?",
+                (status, json.dumps(receipt, default=str), error, time.time(), draft_id, HITL_DISPATCHING),
             )
-            if cur.rowcount != 1:
-                raise HitlDraftNotPending(draft_id, row["status"])
             conn.commit()
         finally:
             conn.close()
-
-        draft = {**dict(row), "status": new_status, "approved_by": approved_by, "approved_at": approved_at}
-        if target_phone is None:
-            print(f"[HITL] Draft {draft_id} approved by {approved_by} has no valid recipient; no call placed.")
-            receipt = {"status": "NO_RECIPIENT", "detail": "Draft has no valid recipient phone number; no call was placed."}
-        else:
-            receipt = execute_mcp_tool(
-                "dispatch_approved_alert",
-                {
-                    "phone_number": target_phone,
-                    "location": draft["location"],
-                    "severity": draft["severity"],
-                    "language": language or draft["language"],
-                    "max_depth_m": draft["max_depth_m"],
-                },
-            )["data"]
+        if error:
+            raise HitlDispatchFailed(draft_id, error)
         return {
             "draft_id": draft_id,
-            "status": new_status,
+            "status": status,
             "approved_by": approved_by,
             "dispatch_receipt": receipt,
-            "draft": draft,
+            "aws_dispatch": aws_dispatch,
+            "draft": {**draft, "status": status, "approved_by": approved_by, "approved_at": approved_at},
         }
 
 

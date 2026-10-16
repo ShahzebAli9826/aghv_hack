@@ -18,9 +18,9 @@ from app.ml.postprocess import PostProcessor
 from app.ml.urnn_nowcaster import get_shared_urnn
 from app.aegis.pipeline.impact_analyzer import calculate_live_impact
 from app.RAG.generator import SituationReportGenerator
-from app.agent.incident_orchestrator import get_incident_orchestrator
+from app.agent.incident_orchestrator import HITL_DISPATCH_FAILED, HitlDispatchFailed, get_incident_orchestrator
 from app.api.auth_deps import slugify_location, normalize_and_validate_phone
-from app.aws import s3_service, sns_service, polly_service, cloudwatch_service
+from app.aws import s3_service, polly_service, cloudwatch_service
 
 
 class FloodAgentState:
@@ -98,8 +98,12 @@ class FloodAgent:
         voice_dispatched = {}
         draft_id = orch_res.get("hitl_draft_id")
         if not require_hitl_for_calls and draft_id:
-            voice_dispatched = self.approve_hitl_action(draft_id, approved_by=requested_by, language=language)
-            orch_res["agent_nodes_status"]["CommsAgent"] = "DISPATCHED"
+            try:
+                voice_dispatched = self.approve_hitl_action(draft_id, approved_by=requested_by, language=language)
+                orch_res["agent_nodes_status"]["CommsAgent"] = "DISPATCHED"
+            except HitlDispatchFailed as exc:
+                voice_dispatched = {"draft_id": draft_id, "status": HITL_DISPATCH_FAILED, "error": exc.error}
+                orch_res["agent_nodes_status"]["CommsAgent"] = HITL_DISPATCH_FAILED
             rlog(f"[CommsAgent] HITL draft {draft_id} approved at request time by {requested_by} -> {voice_dispatched['status']}")
 
         rain_details = check_rainfall_detailed(lat, lon)
@@ -234,7 +238,8 @@ class FloodAgent:
         formatted = []
         for item in items:
             st = item.get("status", "PENDING_APPROVAL")
-            if status and status.upper() == "PENDING" and "PENDING" not in st.upper():
+            awaiting = "PENDING" in st.upper() or st == HITL_DISPATCH_FAILED
+            if status and status.upper() == "PENDING" and not awaiting:
                 continue
             cap = item.get("cap_alert", {})
             formatted.append({
@@ -249,23 +254,12 @@ class FloodAgent:
                 "status": "PENDING" if "PENDING" in st.upper() else st,
                 "cap_alert": cap,
                 "web_evidence": item.get("web_evidence"),
+                "dispatch_error": item.get("dispatch_error"),
             })
         return formatted
 
     def approve_hitl_action(self, item_id: str, approved_by: str, language: str = "hi"):
-        """Approves a pending HITL draft and dispatches CAP Voice + AWS SNS + AWS Polly."""
-        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, approved_by=approved_by, language=language)
-        loc = res["draft"]["location"]
-        sev = res["draft"]["severity"]
-        try:
-            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=res["draft"]["max_depth_m"])
-            polly_res = polly_service.synthesize_emergency_alert(
-                f"HITL Approved Emergency Alert for {loc}. Severity: {sev}.",
-                language="hi-IN" if str(language).lower().startswith("hi") else "en-IN",
-            )
-            res["aws_dispatch"] = {"sns": sns_res, "polly": polly_res}
-        except Exception:
-            pass
-        return res
+        """Approves a pending (or failed) HITL draft and dispatches voice + SNS + Polly once; see the orchestrator."""
+        return self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, approved_by=approved_by, language=language)
 
 
