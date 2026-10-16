@@ -475,6 +475,9 @@ def merge_evidence(outcomes: list[TaskOutcome]) -> tuple[list[Evidence], list[Co
     return items, detect_conflicts(items)
 
 
+NO_EVIDENCE = "No current official evidence was found. "
+
+
 def summarize(evidence: list[Evidence], conflicts: list[Conflict], failed: list[FailedSource]) -> str:
     counts = {g: sum(1 for e in evidence if e.grade is g) for g in Grade}
     parts = [
@@ -484,7 +487,7 @@ def summarize(evidence: list[Evidence], conflicts: list[Conflict], failed: list[
         f"{counts[Grade.insufficient]} insufficient",
     ]
     text = f"{len(evidence)} evidence items ({', '.join(parts)}); {len(conflicts)} conflicts; {len(failed)} sources failed."
-    return text + " For human review only."
+    return (NO_EVIDENCE if not evidence else "") + text + " For human review only."
 
 
 @dataclass
@@ -535,6 +538,8 @@ def compose(handle: _Handle, *, state: RunState, mock: bool, finished_at: dateti
         data_quality.append("conflicts_present")
     if any(e.validation_status.value == "rejected" for e in evidence):
         data_quality.append("rejected_items_present")
+    if not evidence and state not in (RunState.queued, RunState.running):
+        data_quality.append("insufficient_evidence")
     ledger = handle.ledger
     if ledger is not None and not mock and ledger.over_budget:
         data_quality.append("over_budget")
@@ -570,7 +575,9 @@ def terminal_state(handle: _Handle) -> RunState:
     failures = len(handle.skipped) + sum(1 for o in handle.outcomes if o.failure is not None)
     if succeeded == 0:
         return RunState.failed
-    return RunState.partial if failures else RunState.succeeded
+    if failures or not any(o.evidence for o in handle.outcomes):
+        return RunState.partial
+    return RunState.succeeded
 
 
 # --- runner ---

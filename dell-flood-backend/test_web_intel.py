@@ -719,6 +719,16 @@ def test_one_source_fails_while_others_succeed_is_partial():
     assert run.sources_failed == 2
 
 
+def test_run_with_no_evidence_is_not_succeeded():
+    empty = run_body({"status": "success", "stations": []}, run_id="run_e")
+    run = run_and_wait(make_service(tinyfish=FakeHTTP(agent_routes({"run_e": empty}))), [ProductId.river_levels])
+    assert (run.state, run.evidence, run.failed_sources) == (RunState.partial, [], [])
+    assert "insufficient_evidence" in run.data_quality
+    assert run.summary == ("No current official evidence was found. 0 evidence items (0 verified official, "
+                           "0 credible secondary, 0 unverified, 0 insufficient); 0 conflicts; 0 sources failed. "
+                           "For human review only.")
+
+
 def test_replay_mode_is_unmistakably_mock():
     service = make_service(make_settings(mode=Mode.replay, api_key=None))
     run = run_and_wait(service, list(ProductId))
