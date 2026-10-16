@@ -52,7 +52,7 @@ def generate_multilingual_voice_script(
     location: str,
     severity: str,
     language: str = "hi",
-    max_depth_m: float = 0.65,
+    max_depth_m: Optional[float] = 0.65,
     shelter_name: str = "High-Ground NDRF Relief Camp",
 ) -> str:
     """
@@ -63,28 +63,31 @@ def generate_multilingual_voice_script(
     lang_code = "hi" if str(language).lower().startswith("hi") else "en"
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    depth_en = f" to {max_depth_m:.2f} meters" if max_depth_m is not None else ""
+    depth_hi = f" {max_depth_m:.2f} मीटर तक" if max_depth_m is not None else ""
 
     if lang_code == "hi":
         prompt = (
             f"Write an urgent, 25-word emergency flood voice call warning in pure HINDI (Devanagari script) "
-            f"alerting citizens near {location} that {severity} floodwater is rising to {max_depth_m:.2f} meters. "
+            f"alerting citizens near {location} that {severity} floodwater is rising{depth_en}. "
             f"Instruct them to immediately evacuate to {shelter_name}. "
             f"Return ONLY the spoken Hindi text without quotes, markdown, or stage directions."
         )
         fallback_script = (
-            f"आपातकालीन बाढ़ चेतावनी! {location} क्षेत्र में {severity} स्तर की बाढ़ का पानी {max_depth_m:.2f} मीटर तक बढ़ रहा है। "
+            f"आपातकालीन बाढ़ चेतावनी! {location} क्षेत्र में {severity} स्तर की बाढ़ का पानी{depth_hi} बढ़ रहा है। "
             f"कृपया तुरंत निकटतम सुरक्षित राहत शिविर {shelter_name} की ओर प्रस्थान करें।"
         )
     else:
         prompt = (
             f"Write an urgent, 25-word emergency flood voice call warning in English "
-            f"alerting citizens near {location} that {severity} floodwater is rising to {max_depth_m:.2f} meters. "
+            f"alerting citizens near {location} that {severity} floodwater is rising{depth_en}. "
             f"Instruct them to immediately evacuate to {shelter_name}. "
             f"Return ONLY the spoken English text without quotes, markdown, or stage directions."
         )
         fallback_script = (
-            f"Emergency Flood Warning! {severity} floodwater near {location} is projected to reach {max_depth_m:.2f} meters. "
-            f"Please evacuate immediately to {shelter_name} on higher ground."
+            f"Emergency Flood Warning! {severity} floodwater near {location} "
+            + (f"is projected to reach {max_depth_m:.2f} meters. " if max_depth_m is not None else "is rising. ")
+            + f"Please evacuate immediately to {shelter_name} on higher ground."
         )
 
     if gemini_key:

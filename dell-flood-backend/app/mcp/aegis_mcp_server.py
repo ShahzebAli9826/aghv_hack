@@ -4,6 +4,7 @@ import time
 import uuid
 import hashlib
 import numpy as np
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
@@ -441,8 +442,8 @@ def build_cap_v12_payload(
     lat: float,
     lon: float,
     severity: str,
-    area_sq_km: float = 2.4,
-    max_depth_m: float = 0.72,
+    area_sq_km: Optional[float] = 2.4,
+    max_depth_m: Optional[float] = 0.72,
     language: str = "hi",
 ) -> Dict[str, Any]:
     """
@@ -456,6 +457,13 @@ def build_cap_v12_payload(
 
     speech_hi = generate_multilingual_voice_script(location, severity, language="hi", max_depth_m=max_depth_m)
     speech_en = generate_multilingual_voice_script(location, severity, language="en", max_depth_m=max_depth_m)
+    extent = (
+        f"{area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m"
+        if area_sq_km is not None and max_depth_m is not None
+        else "flood extent and depth not measured: EO analysis unavailable"
+    )
+    loc_x = xml_escape(location)
+    area_desc = xml_escape(f"{location} ({extent})")
 
     cap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
@@ -472,10 +480,10 @@ def build_cap_v12_payload(
     <urgency>{urgency}</urgency>
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
-    <headline>आपातकालीन बाढ़ चेतावनी: {location}</headline>
-    <description>{speech_hi}</description>
+    <headline>आपातकालीन बाढ़ चेतावनी: {loc_x}</headline>
+    <description>{xml_escape(speech_hi)}</description>
     <area>
-      <areaDesc>{location} ({area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m)</areaDesc>
+      <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
     </area>
   </info>
@@ -486,10 +494,10 @@ def build_cap_v12_payload(
     <urgency>{urgency}</urgency>
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
-    <headline>Emergency Flood Alert: {location}</headline>
-    <description>{speech_en}</description>
+    <headline>Emergency Flood Alert: {loc_x}</headline>
+    <description>{xml_escape(speech_en)}</description>
     <area>
-      <areaDesc>{location} ({area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m)</areaDesc>
+      <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
     </area>
   </info>
@@ -509,6 +517,10 @@ def build_cap_v12_payload(
         "script_en": speech_en,
         "xml": cap_xml,
     }
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    return None if value is None else float(value)
 
 
 def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict[str, Any]:
@@ -635,8 +647,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             lat=lat,
             lon=lon,
             severity=str(arguments.get("severity", "CRITICAL")),
-            area_sq_km=float(arguments.get("area_sq_km", 2.6)),
-            max_depth_m=float(arguments.get("max_depth_m", 0.78)),
+            area_sq_km=_optional_float(arguments.get("area_sq_km")),
+            max_depth_m=_optional_float(arguments.get("max_depth_m")),
             language=str(arguments.get("language", "hi")),
         )
 

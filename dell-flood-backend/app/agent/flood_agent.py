@@ -142,10 +142,12 @@ class FloodAgent:
         polly_info = {}
         try:
             tts_lang = "hi-IN" if str(language).lower().startswith("hi") else "en-IN"
+            depth_hi = f" जल स्तर {peak_depth_m:.1f} मीटर तक पहुंच सकता है।" if peak_depth_m is not None else ""
+            depth_en = f" Projected water depth is {peak_depth_m:.1f} meters." if peak_depth_m is not None else ""
             tts_text = (
-                f"सावधान! {location} में बाढ़ का गंभीर खतरा है। जल स्तर {peak_depth_m:.1f} मीटर तक पहुंच सकता है। कृपया सुरक्षित आश्रय स्थल की ओर प्रस्थान करें।"
+                f"सावधान! {location} में बाढ़ का गंभीर खतरा है।{depth_hi} कृपया सुरक्षित आश्रय स्थल की ओर प्रस्थान करें।"
                 if tts_lang == "hi-IN"
-                else f"Emergency Flood Alert for {location}. Projected water depth is {peak_depth_m:.1f} meters. Proceed to the nearest high-elevation shelter immediately."
+                else f"Emergency Flood Alert for {location}.{depth_en} Proceed to the nearest high-elevation shelter immediately."
             )
             polly_info = polly_service.synthesize_emergency_alert(tts_text, language=tts_lang)
             rlog(f"  [AWS Polly] Neural Voice synthesized ({polly_info.get('voice_id')}, {tts_lang}): {polly_info.get('s3_key')}")
@@ -161,7 +163,7 @@ class FloodAgent:
             cw_info = cloudwatch_service.emit_disaster_metrics(
                 location=location,
                 severity_index=sev_score,
-                evacuation_routes_count=max(1, facilities_at_risk),
+                evacuation_routes_count=max(1, facilities_at_risk or 0),
                 nowcast_latency_ms=elapsed_ms,
                 reports_ingested=1,
             )
@@ -216,6 +218,7 @@ class FloodAgent:
             "urnn": urnn_data,
             "target_phones": target_phones,
             "web_intelligence": orch_res.get("web_intelligence"),
+            "degraded_nodes": orch_res.get("degraded_nodes", {}),
             "aws_cloud": {
                 "s3_report": s3_report_info,
                 "sns_broadcast": voice_dispatched.get("aws_dispatch", {}).get("sns", {}),

@@ -238,6 +238,57 @@ def test_agent_cycle_makes_no_tinyfish_call():
     assert (seen, started) == ([], [])
 
 
+class _GaugeDanger:
+    """Observed hydrology at DANGER, so escalation has a non-EO source."""
+
+    def __enter__(self):
+        from app.mcp import aegis_mcp_server
+        self.module = aegis_mcp_server
+        self.saved = aegis_mcp_server.check_gauge
+        aegis_mcp_server.check_gauge = lambda *a, **k: {
+            "station": "Test Gauge", "source": "test", "river_discharge_m3s": 3100.0, "forecast_peak_discharge_m3s": 3300.0,
+            "current_meters": 18.1, "warning_level_meters": 15.0, "danger_level_meters": 17.5, "status": "DANGER",
+        }
+
+    def __exit__(self, *exc):
+        self.module.check_gauge = self.saved
+
+
+def test_segmentation_failure_degrades_instead_of_crashing():
+    _fresh_env()
+    with _ModelMissing(), _GaugeDanger():
+        res = endpoints.agent.run_cycle(location="Patna, Bihar", lat=25.6124, lon=85.1376, language="en")
+    reason = "RuntimeError: SegFormer weights not found (best_model_focal.pth)"
+    assert res["agent_nodes_status"]["EOAnalystAgent"] == "FAILED"
+    assert res["degraded_nodes"] == {"EOAnalystAgent": reason}
+    assert (res["area_sq_km"], res["peak_depth_m"], res["population"]) == (None, None, None)
+    assert (res["escalation_tier"], res["severity"], res["escalation_reasons"]) == (
+        "ORANGE", "HIGH", ["ORANGE: GloFAS gauge status DANGER"])
+    assert res["report"].startswith(f"SITUATION REPORT NOT GENERATED for Patna, Bihar: EO analysis failed ({reason}).")
+    assert any(line.endswith(f"[EOAnalystAgent] FAILED: {reason}. Flood area and depth are unknown, OSM impact was "
+                             "skipped, and escalation continues from hydrology only (ORANGE).") for line in res["logs"])
+    cap = ET.fromstring(res["cap_alert"]["xml"])
+    ns = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
+    assert cap.find("cap:info/cap:area/cap:areaDesc", ns).text == (
+        "Patna, Bihar (flood extent and depth not measured: EO analysis unavailable)")
+    assert res["hitl_draft_id"].startswith("hitl_")
+
+
+def test_web_evidence_failure_degrades_instead_of_crashing():
+    service = _fresh_env()
+
+    def broken(**kwargs):
+        raise OSError("database is locked")
+
+    service.store.latest_for = broken
+    with _ModelProbability(0.95):
+        res = endpoints.agent.run_cycle(location="Patna, Bihar", lat=25.6124, lon=85.1376, language="en")
+    assert res["agent_nodes_status"]["WebEvidenceAgent"] == "FAILED"
+    assert res["degraded_nodes"] == {"WebEvidenceAgent": "web evidence lookup failed: OSError: database is locked"}
+    assert (res["escalation_tier"], res["web_intelligence"]["evidence"]) == ("RED", [])
+    assert res["hitl_draft_id"].startswith("hitl_")
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

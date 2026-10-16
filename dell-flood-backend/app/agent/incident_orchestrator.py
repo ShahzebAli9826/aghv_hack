@@ -195,6 +195,7 @@ class MultiAgentIncidentOrchestrator:
 
         escalation = "NONE"
         escalation_reasons: List[str] = []
+        degraded: Dict[str, str] = {}
 
         def escalate(tier: str, reason: str):
             nonlocal escalation
@@ -233,6 +234,7 @@ class MultiAgentIncidentOrchestrator:
         web_intel = web_evidence.lookup(location, lat, lon)
         nodes_status["WebEvidenceAgent"] = web_intel["status"]
         if web_intel["status"] == web_evidence.FAILED:
+            degraded["WebEvidenceAgent"] = web_intel["error"]
             logs.append(f"[WebEvidenceAgent] FAILED: {web_intel['error']}. The cycle continues without web evidence.")
         else:
             logs.append(
@@ -245,45 +247,73 @@ class MultiAgentIncidentOrchestrator:
         # ------------------------------------------------------------------
         nodes_status["EOAnalystAgent"] = "RUNNING"
         logs.append("[EOAnalystAgent] Executing SegFormer MiT-B2 SAR+Optical Fusion & U-RNN 3-Scale ConvGRU 4D Nowcast...")
-        eo_data = invoke_mcp("run_flood_segmentation", {"lat": lat, "lon": lon})
-        urnn_data = invoke_mcp("run_urnn_nowcast", {"lat": lat, "lon": lon, "rain_mm_hr": rain_data["peak_intensity_mm_hr"]})
-        area_km2 = float(eo_data["area_sq_km"])
-        if area_km2 > 0:
-            impact_data = invoke_mcp("estimate_osm_impact", {"lat": lat, "lon": lon, "area_sq_km": area_km2})
-        else:
-            impact_data = {
-                "source": "not estimated: segmentation found no flooded area",
-                "population_affected": 0,
-                "buildings_damaged": 0,
-                "facilities_at_risk": 0,
+        area_km2: Optional[float] = None
+        peak_depth_60m: Optional[float] = None
+        try:
+            eo_data = invoke_mcp("run_flood_segmentation", {"lat": lat, "lon": lon})
+            urnn_data = invoke_mcp("run_urnn_nowcast", {"lat": lat, "lon": lon, "rain_mm_hr": rain_data["peak_intensity_mm_hr"]})
+            area_km2 = float(eo_data["area_sq_km"])
+            peak_depth_60m = float(urnn_data["horizon_metrics"]["t_60m"]["max_depth_m"])
+        except Exception as exc:
+            degraded["EOAnalystAgent"] = f"{type(exc).__name__}: {exc}"[:300]
+            unknown = f"unknown: EO analysis failed ({degraded['EOAnalystAgent']})"
+            area_km2 = peak_depth_60m = None
+            eo_data = {
+                "status": "FAILED", "error": degraded["EOAnalystAgent"], "classification": None, "area_sq_km": None,
+                "confidence_pct": None, "input_provenance": "esri_basemap+synthetic_sar", "area_provenance": unknown,
             }
+            urnn_data = {"status": "SKIPPED", "horizon_metrics": {}, "depth_provenance": unknown}
 
-        peak_depth_60m = float(urnn_data["horizon_metrics"]["t_60m"]["max_depth_m"])
-        if area_km2 >= 0.80:
-            escalate("RED", f"segmented flood area {area_km2:.2f} km2 >= 0.80 ({eo_data['input_provenance']} input)")
-        # The depth is an untrained heuristic, so it only escalates when observed hydrology already reached ORANGE.
-        if peak_depth_60m >= 0.45 and escalation == "ORANGE":
-            escalate("RED", f"{urnn_data['depth_provenance']} +60 min depth {peak_depth_60m:.2f} m >= 0.45 m with ORANGE hydrology")
-        nodes_status["EOAnalystAgent"] = "COMPLETED"
-        logs.append(
-            f"[EOAnalystAgent] Active Flood Area: {area_km2:.2f} km² ({eo_data['input_provenance']}) | "
-            f"U-RNN +60m Peak Depth: {peak_depth_60m:.2f}m ({urnn_data['depth_provenance']}) | "
-            f"OSM Affected: {impact_data['population_affected']:,} citizens, {impact_data['buildings_damaged']} buildings -> Escalation: {escalation}"
-        )
+        if "EOAnalystAgent" in degraded:
+            impact_data = {
+                "source": "not estimated: EO analysis failed",
+                "population_affected": None,
+                "buildings_damaged": None,
+                "facilities_at_risk": None,
+            }
+            nodes_status["EOAnalystAgent"] = "FAILED"
+            logs.append(
+                f"[EOAnalystAgent] FAILED: {degraded['EOAnalystAgent']}. Flood area and depth are unknown, OSM impact "
+                f"was skipped, and escalation continues from hydrology only ({escalation})."
+            )
+        else:
+            if area_km2 > 0:
+                impact_data = invoke_mcp("estimate_osm_impact", {"lat": lat, "lon": lon, "area_sq_km": area_km2})
+            else:
+                impact_data = {
+                    "source": "not estimated: segmentation found no flooded area",
+                    "population_affected": 0,
+                    "buildings_damaged": 0,
+                    "facilities_at_risk": 0,
+                }
+            if area_km2 >= 0.80:
+                escalate("RED", f"segmented flood area {area_km2:.2f} km2 >= 0.80 ({eo_data['input_provenance']} input)")
+            # The depth is an untrained heuristic, so it only escalates when observed hydrology already reached ORANGE.
+            if peak_depth_60m >= 0.45 and escalation == "ORANGE":
+                escalate("RED", f"{urnn_data['depth_provenance']} +60 min depth {peak_depth_60m:.2f} m >= 0.45 m with ORANGE hydrology")
+            nodes_status["EOAnalystAgent"] = "COMPLETED"
+            logs.append(
+                f"[EOAnalystAgent] Active Flood Area: {area_km2:.2f} km² ({eo_data['input_provenance']}) | "
+                f"U-RNN +60m Peak Depth: {peak_depth_60m:.2f}m ({urnn_data['depth_provenance']}) | "
+                f"OSM Affected: {impact_data['population_affected']:,} citizens, {impact_data['buildings_damaged']} buildings -> Escalation: {escalation}"
+            )
 
         # ------------------------------------------------------------------
         # NODE 3: CrowdIntelligenceAgent (60/40 Citizen Cluster Verification)
         # ------------------------------------------------------------------
         nodes_status["CrowdIntelligenceAgent"] = "RUNNING"
         crowd_input = nearby_report_severity(lat, lon)
-        model_prob_pct = float(eo_data["confidence_pct"]) if area_km2 > 0 else 0.0
+        flooded = bool(area_km2)
+        model_prob_pct = float(eo_data["confidence_pct"]) if flooded else 0.0
         crowd_data = invoke_mcp(
             "verify_crowd_cluster",
             {"lat": lat, "lon": lon, "user_severity_weight": crowd_input["weight"], "model_prob_pct": model_prob_pct},
         )
         crowd_data["user_severity_provenance"] = crowd_input["provenance"]
         crowd_data["model_prob_provenance"] = (
-            "segmentation confidence over flooded pixels" if area_km2 > 0 else "no flooded pixels; model probability set to 0"
+            "segmentation confidence over flooded pixels" if flooded
+            else "EO analysis failed; model probability set to 0" if "EOAnalystAgent" in degraded
+            else "no flooded pixels; model probability set to 0"
         )
         if crowd_data["cluster_verified"]:
             escalate("YELLOW", f"crowd cluster verified ({crowd_data['verification_score']}%, {crowd_input['report_count']} reports)")
@@ -299,7 +329,10 @@ class MultiAgentIncidentOrchestrator:
         # ------------------------------------------------------------------
         nodes_status["LogisticsAgent"] = "RUNNING"
         evac_data = invoke_mcp("compute_dynamic_evacuation", {"lat": lat, "lon": lon})
-        alloc_data = invoke_mcp("allocate_shelter_capacity", {"population_affected": impact_data["population_affected"], "location": location})
+        if impact_data["population_affected"] is None:
+            alloc_data = {"status": "SKIPPED", "reason": "population not estimated: EO analysis failed"}
+        else:
+            alloc_data = invoke_mcp("allocate_shelter_capacity", {"population_affected": impact_data["population_affected"], "location": location})
         nodes_status["LogisticsAgent"] = "COMPLETED"
         logs.append(
             f"[LogisticsAgent] Time-Varying Dijkstra Route: {evac_data['distance_km']} km (ETA {evac_data['eta_minutes']} min), "
@@ -310,23 +343,33 @@ class MultiAgentIncidentOrchestrator:
         # NODE 5: ReporterAgent (4-Format Report + Numeric Claim Validator)
         # ------------------------------------------------------------------
         nodes_status["ReporterAgent"] = "RUNNING"
-        report = self.rag_generator.generate_report_with_validation(
-            location=location,
-            area_sq_km=area_km2,
-            classification=eo_data.get("classification", "Flood Inundation"),
-            severity=severity,
-            population_affected=impact_data["population_affected"],
-            buildings_damaged=impact_data["buildings_damaged"],
-            facilities_at_risk=impact_data["facilities_at_risk"],
-            report_format=report_format,
-            max_depth_m=peak_depth_60m,
-            language=language,
-        )
-        report_text = report["report_text"]
-        uncited = [name for name, ok in report["checks"].items() if not ok]
-        verdict = "PASS" if report["grounding_passed"] else f"FAIL ({', '.join(uncited)})"
-        nodes_status["ReporterAgent"] = "COMPLETED"
-        logs.append(f"[ReporterAgent] Generated {report_format} Situation Report — Numeric Hallucination Validator: {verdict}.")
+        if "EOAnalystAgent" in degraded:
+            report_text = (
+                f"SITUATION REPORT NOT GENERATED for {location}: EO analysis failed ({degraded['EOAnalystAgent']}). "
+                f"Flood area, depth and impact are unknown. Escalation {escalation} rests on hydrology only"
+                + (f": {'; '.join(escalation_reasons)}." if escalation_reasons else ".")
+            )
+            report = {"grounding_passed": None, "checks": {}}
+            nodes_status["ReporterAgent"] = "SKIPPED_EO_FAILED"
+            logs.append("[ReporterAgent] Skipped: no model figures to report because EO analysis failed.")
+        else:
+            report = self.rag_generator.generate_report_with_validation(
+                location=location,
+                area_sq_km=area_km2,
+                classification=eo_data.get("classification", "Flood Inundation"),
+                severity=severity,
+                population_affected=impact_data["population_affected"],
+                buildings_damaged=impact_data["buildings_damaged"],
+                facilities_at_risk=impact_data["facilities_at_risk"],
+                report_format=report_format,
+                max_depth_m=peak_depth_60m,
+                language=language,
+            )
+            report_text = report["report_text"]
+            uncited = [name for name, ok in report["checks"].items() if not ok]
+            verdict = "PASS" if report["grounding_passed"] else f"FAIL ({', '.join(uncited)})"
+            nodes_status["ReporterAgent"] = "COMPLETED"
+            logs.append(f"[ReporterAgent] Generated {report_format} Situation Report — Numeric Hallucination Validator: {verdict}.")
 
         # ------------------------------------------------------------------
         # NODE 6: CommsAgent (CAP v1.2 Alert + HITL Approval Gate)
@@ -398,6 +441,7 @@ class MultiAgentIncidentOrchestrator:
             "cap_alert": cap_payload,
             "hitl_draft_id": draft_id,
             "web_intelligence": web_intel,
+            "degraded_nodes": degraded,
         }
 
     def _save_hitl_draft(
