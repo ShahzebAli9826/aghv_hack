@@ -47,13 +47,26 @@ INTEL_DIR = Path(__file__).parent / "app" / "intel"
 
 # --- fakes ---
 
-class FakeHTTP:
-    """Records every request and answers from a route table keyed by 'METHOD url-without-query'."""
+class FakeStream:
+    def __init__(self, peer):
+        self.peer = peer
 
-    def __init__(self, routes=None):
+    def get_extra_info(self, name):
+        return (self.peer, 443) if name == "server_addr" else None
+
+
+class FakeHTTP:
+    """Records every request and answers from a route table keyed by 'METHOD url-without-query'.
+
+    Responses carry a network_stream whose server_addr is `peer`, as a real httpx transport's do;
+    `peer=None` leaves it off.
+    """
+
+    def __init__(self, routes=None, peer="164.100.1.10"):
         self.routes = dict(routes or {})
         self.requests = []
         self.lock = threading.Lock()
+        self.peer = peer
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = request.content.decode("utf-8") if request.content else ""
@@ -63,8 +76,12 @@ class FakeHTTP:
         key = f"{request.method} {str(request.url).split('?')[0]}"
         handler = self.routes.get(key)
         if handler is None:
-            return httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": key}})
-        return handler(request) if callable(handler) else handler
+            response = httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": key}})
+        else:
+            response = handler(request) if callable(handler) else handler
+        if self.peer is not None:
+            response.extensions = {**response.extensions, "network_stream": FakeStream(self.peer)}
+        return response
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self))
@@ -464,6 +481,22 @@ def test_credential_header_stays_on_original_https_host():
         ("http://api.imd.gov.in/c", None),
         ("https://mausam.imd.gov.in/d", None),
     ]
+
+
+def test_connected_peer_must_be_public():
+    """DNS can change between the SSRF check and connect; the address actually connected to decides."""
+    routes = {"GET https://sachet.ndma.gov.in/feed": lambda r: httpx.Response(200, text="<rss/>")}
+    sachet = SOURCES["sachet_bihar"].domains
+    assert safe_get(FakeHTTP(routes).client(), "https://sachet.ndma.gov.in/feed", sachet,
+                    resolver=public_resolver) == ("https://sachet.ndma.gov.in/feed", "<rss/>")
+    for peer, want in (("10.0.0.5", "peer rejected: private_address"), ("127.0.0.1", "peer rejected: private_address"),
+                       (None, "peer rejected: unverifiable")):
+        try:
+            safe_get(FakeHTTP(routes, peer=peer).client(), "https://sachet.ndma.gov.in/feed", sachet,
+                     resolver=public_resolver)
+            raise AssertionError(f"peer {peer} must be rejected")
+        except DirectFetchError as exc:
+            assert str(exc) == want, peer
 
 
 # --- prompt injection and dispatch safety ---
