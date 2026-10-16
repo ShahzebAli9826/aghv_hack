@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.agent.tools import (
     check_rainfall_detailed,
@@ -16,6 +16,7 @@ from app.agent.tools import (
     trigger_voice_call,
     generate_multilingual_voice_script,
 )
+from app.api.auth_deps import require_official
 from app.aws import (
     s3_service,
     dynamodb_service,
@@ -188,7 +189,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "dispatch_approved_alert",
-        "description": "Dispatches HITL-approved emergency voice call to +917678656930 in Hindi or English via Twilio.",
+        "description": "Dispatches a HITL-approved emergency voice call to the draft's recipient in Hindi or English via Twilio.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -242,6 +243,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "severity_level": {"type": "string"},
                 "water_depth_m": {"type": "number"},
                 "shelter_name": {"type": "string"},
+                "dry_run": {"type": "boolean"},
             },
             "required": ["location", "severity_level"],
         },
@@ -430,6 +432,10 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
 ]
 
 
+HITL_ONLY_TOOLS = frozenset(t["name"] for t in MCP_TOOLS_REGISTRY if t["requires_official_approval"])
+HITL_ONLY_REFUSAL = "dispatch tools run only through HITL approval"
+
+
 def build_cap_v12_payload(
     location: str,
     lat: float,
@@ -501,7 +507,6 @@ def build_cap_v12_payload(
         "headline_en": f"Emergency Flood Alert: {location}",
         "script_hi": speech_hi,
         "script_en": speech_en,
-        "target_demo_phone": "+917678656930",
         "xml": cap_xml,
     }
 
@@ -540,6 +545,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         data = {
             "sentinel2_scene": f"S2B_MSIL2A_{datetime.now(timezone.utc).strftime('%Y%m%d')}_T45QWF",
             "sentinel1_scene": f"S1A_IW_GRDH_{datetime.now(timezone.utc).strftime('%Y%m%d')}_VV_VH",
+            "scene_id_provenance": "synthetic",
+            "input_provenance": "esri_basemap+synthetic_sar",
             "cloud_cover_pct": sat["cloud_cover"],
             "fusion_mode": "SAR_DOMINATED_CLOUD_GATE" if sat["cloud_cover"] > 35 else "DUAL_OPTICAL_SAR_FUSION",
         }
@@ -567,6 +574,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "base_elevation_m": round(base_elev, 1),
             "ecc_alignment": ecc_meta,
             "cloud_cover_pct": sat["cloud_cover"],
+            "input_provenance": "esri_basemap+synthetic_sar",
         }
 
     elif tool_name == "run_urnn_nowcast":
@@ -581,6 +589,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "latency_ms": res["latency_ms"],
             "telemetry": res["telemetry"],
             "horizon_metrics": res["horizon_metrics"],
+            "depth_provenance": res["depth_provenance"],
         }
 
     elif tool_name == "estimate_osm_impact":
@@ -633,7 +642,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
 
     elif tool_name == "dispatch_approved_alert":
         data = trigger_voice_call(
-            phone_number=str(arguments.get("phone_number", "+917678656930")),
+            phone_number=arguments.get("phone_number"),
             location=location,
             severity=str(arguments.get("severity", "CRITICAL")),
             language=str(arguments.get("language", "hi")),
@@ -662,6 +671,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             severity_level=str(arguments.get("severity_level", "CRITICAL")),
             water_depth_m=float(arguments.get("water_depth_m", 1.2)),
             shelter_name=str(arguments.get("shelter_name", "Gandhi Maidan Relief Camp")),
+            dry_run=bool(arguments.get("dry_run", False)),
         )
 
     elif tool_name == "aws_synthesize_voice_polly":
@@ -781,7 +791,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon S3", "aws_upload_report_s3", {"local_filepath": "./reports/report_patna_district_1787128244.pdf"}),
             ("Amazon DynamoDB (Reports)", "aws_record_ground_report_dynamodb", {"location_name": location, "severity": "CRITICAL", "water_depth": "Chest-deep"}),
             ("Amazon DynamoDB (Shelters)", "aws_manage_shelters_dynamodb", {"action": "list"}),
-            ("Amazon SNS", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84}),
+            ("Amazon SNS (dry run, nothing published)", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84, "dry_run": True}),
             ("Amazon Polly", "aws_synthesize_voice_polly", {"text": f"सावधान! {location} में बाढ़ की चेतावनी।", "language": "hi-IN"}),
             ("Amazon Cognito", "aws_verify_cognito_identity", {"username": "ndrf_commander", "role": "IncidentCommander"}),
             ("Amazon CloudWatch", "aws_get_cloudwatch_metrics", {}),
@@ -856,8 +866,10 @@ async def list_mcp_tools():
     }
 
 
-@mcp_router.post("/execute")
+@mcp_router.post("/execute", dependencies=[Depends(require_official)])
 async def http_execute_mcp_tool(req: MCPExecuteRequest):
+    if req.tool_name in HITL_ONLY_TOOLS:
+        raise HTTPException(status_code=403, detail=HITL_ONLY_REFUSAL)
     try:
         return execute_mcp_tool(req.tool_name, req.arguments, req.idempotency_key)
     except ValueError as ve:
@@ -893,39 +905,47 @@ def build_cap_v12_alert(
 
 def run_stdio_mcp_server():
     """Standard JSON-RPC 2.0 stdio transport for external MCP hosts (Claude Desktop / Cursor)."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-            req_id = msg.get("id")
-            method = msg.get("method")
-            params = msg.get("params", {})
+    protocol_out = sys.stdout
+    # Tools and services print() diagnostics; stdout must carry nothing but JSON-RPC frames.
+    sys.stdout = sys.stderr
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                req_id = msg.get("id")
+                method = msg.get("method")
+                params = msg.get("params", {})
 
-            if method == "initialize":
-                res = {
-                    "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
-                    "capabilities": {"tools": {}},
-                }
-            elif method == "tools/list":
-                res = {"tools": MCP_TOOLS_REGISTRY}
-            elif method == "tools/call":
-                t_name = params.get("name")
-                t_args = params.get("arguments", {})
-                out = execute_mcp_tool(t_name, t_args)
-                res = {"content": [{"type": "text", "text": json.dumps(out)}]}
-            else:
-                res = {"status": "ok"}
+                if method == "initialize":
+                    res = {
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
+                        "capabilities": {"tools": {}},
+                    }
+                elif method == "tools/list":
+                    res = {"tools": MCP_TOOLS_REGISTRY}
+                elif method == "tools/call":
+                    t_name = params.get("name")
+                    t_args = params.get("arguments", {})
+                    if t_name in HITL_ONLY_TOOLS:
+                        raise PermissionError(HITL_ONLY_REFUSAL)
+                    out = execute_mcp_tool(t_name, t_args)
+                    res = {"content": [{"type": "text", "text": json.dumps(out)}]}
+                else:
+                    res = {"status": "ok"}
 
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
-            sys.stdout.flush()
-        except Exception as exc:
-            sys.stdout.write(
-                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
-            )
-            sys.stdout.flush()
+                protocol_out.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
+                protocol_out.flush()
+            except Exception as exc:
+                protocol_out.write(
+                    json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
+                )
+                protocol_out.flush()
+    finally:
+        sys.stdout = protocol_out
 
 
 if __name__ == "__main__":

@@ -34,8 +34,8 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react-native';
-import { apiService } from '../services/api';
-import { AppLanguage, t, DEFAULT_DEMO_PHONE_E164 } from '../utils/i18n';
+import { apiService, DEMO_CALL_RECIPIENT } from '../services/api';
+import { AppLanguage, t } from '../utils/i18n';
 import { runDijkstra } from '../utils/routing';
 
 interface NowcastPanelProps {
@@ -234,7 +234,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     try {
       const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
       const severity = peakDepth60 >= 0.45 ? 'CRITICAL' : peakDepth60 >= 0.25 ? 'HIGH' : 'MODERATE';
-      const res = await apiService.triggerVoiceCall(DEFAULT_DEMO_PHONE_E164, '', {
+      const res = await apiService.triggerVoiceCall(DEMO_CALL_RECIPIENT, '', {
         location: activePlaceName,
         severity,
         language,
@@ -242,8 +242,8 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
       });
       const msg =
         language === 'hi'
-          ? `📞 +917678656930 पर कॉल भेजी गई!\n\nस्थिति: ${res.call_sid}\nस्क्रिप्ट (हिंदी): ${res.script_dispatched}`
-          : `📞 Dispatched to +917678656930!\n\nStatus: ${res.call_sid}\nScript (${language.toUpperCase()}): ${res.script_dispatched}`;
+          ? `📞 ${res.target} पर कॉल भेजी गई!\n\nस्थिति: ${res.call_sid}\nस्क्रिप्ट (हिंदी): ${res.script_dispatched}`
+          : `📞 Dispatched to ${res.target}!\n\nStatus: ${res.call_sid}\nScript (${language.toUpperCase()}): ${res.script_dispatched}`;
       if (Platform.OS === 'web') {
         window.alert(msg);
       } else {

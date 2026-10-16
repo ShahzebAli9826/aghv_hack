@@ -19,7 +19,7 @@ from app.ml.urnn_nowcaster import get_shared_urnn
 from app.aegis.pipeline.impact_analyzer import calculate_live_impact
 from app.RAG.generator import SituationReportGenerator
 from app.agent.incident_orchestrator import get_incident_orchestrator
-from app.api.auth_deps import slugify_location
+from app.api.auth_deps import slugify_location, normalize_and_validate_phone
 from app.aws import s3_service, sns_service, polly_service, cloudwatch_service
 
 
@@ -60,17 +60,19 @@ class FloodAgent:
         phones=None,
         language="hi",
         report_format="NDMA",
-        auto_approve_hitl=False,
-        require_hitl_for_calls=None,
+        require_hitl_for_calls=True,
+        requested_by=None,
         **kwargs,
     ):
         """
         Autonomous FloodAgent + 6-Agent LangGraph Supervisor Cycle (Solves P7, P17, P20, P21, P27, P28).
         Uses a run-scoped cycle_logs list so concurrent invocations never leak across users.
+        With require_hitl_for_calls=False the draft is approved immediately on behalf of requested_by.
         """
-        target_phones = phones or phone_numbers or ["+917678656930"]
-        if require_hitl_for_calls is not None:
-            auto_approve_hitl = not bool(require_hitl_for_calls)
+        if not require_hitl_for_calls and not requested_by:
+            raise ValueError("Skipping the HITL queue needs the requesting official as requested_by.")
+        target_phones = phones or phone_numbers or []
+        draft_recipient = next((p for p in map(normalize_and_validate_phone, target_phones) if p), None)
         cycle_logs = []
         cycle_start_t = time.time()
 
@@ -88,10 +90,17 @@ class FloodAgent:
             lon=lon,
             language=language,
             report_format=report_format,
-            auto_approve_hitl=auto_approve_hitl,
+            target_phone=draft_recipient,
         )
         for olog in orch_res.get("logs", []):
             rlog(olog)
+
+        voice_dispatched = {}
+        draft_id = orch_res.get("hitl_draft_id")
+        if not require_hitl_for_calls and draft_id:
+            voice_dispatched = self.approve_hitl_action(draft_id, approved_by=requested_by, language=language)
+            orch_res["agent_nodes_status"]["CommsAgent"] = "DISPATCHED"
+            rlog(f"[CommsAgent] HITL draft {draft_id} approved at request time by {requested_by} -> {voice_dispatched['status']}")
 
         rain_details = check_rainfall_detailed(lat, lon)
         rainfall_5day = rain_details["total_window_rain_mm"]
@@ -106,14 +115,14 @@ class FloodAgent:
         urnn_data = orch_res.get("urnn", {})
         impact_data = orch_res.get("impact", {})
 
-        area_sq_km = float(eo_data.get("area_sq_km", 1.85))
-        confidence = int(float(eo_data.get("confidence_pct", 86.0)))
-        classification = eo_data.get("classification", "Flood Inundation")
-        severity = orch_res.get("severity", "HIGH")
-        population_affected = int(impact_data.get("population_affected", 1420))
-        buildings_damaged = int(impact_data.get("buildings_damaged", 310))
-        facilities_at_risk = int(impact_data.get("facilities_at_risk", 4))
-        peak_depth_m = float(urnn_data.get("horizon_metrics", {}).get("t_60m", {}).get("max_depth_m", 0.74))
+        area_sq_km = eo_data.get("area_sq_km")
+        confidence = eo_data.get("confidence_pct")
+        classification = eo_data.get("classification")
+        severity = orch_res["severity"]
+        population_affected = impact_data.get("population_affected")
+        buildings_damaged = impact_data.get("buildings_damaged")
+        facilities_at_risk = impact_data.get("facilities_at_risk")
+        peak_depth_m = urnn_data.get("horizon_metrics", {}).get("t_60m", {}).get("max_depth_m")
         report_text = orch_res.get("situation_report", "")
 
         # Export slugified PDF report & Vault to Amazon S3
@@ -142,19 +151,6 @@ class FloodAgent:
             rlog(f"  [AWS Polly] Neural Voice synthesized ({polly_info.get('voice_id')}, {tts_lang}): {polly_info.get('s3_key')}")
         except Exception as polly_err:
             rlog(f"  [WARN] Polly synthesis notice: {polly_err}")
-
-        # Broadcast Emergency Alert via Amazon SNS
-        sns_info = {}
-        try:
-            sns_info = sns_service.broadcast_flood_warning(
-                location=location,
-                severity_level=severity,
-                water_depth_m=peak_depth_m,
-                evacuation_url=s3_report_info.get("cloud_url_preview", "http://localhost:8081"),
-            )
-            rlog(f"  [AWS SNS] Emergency Topic broadcast dispatched: MessageID={sns_info.get('message_id')}")
-        except Exception as sns_err:
-            rlog(f"  [WARN] SNS broadcast notice: {sns_err}")
 
         # Emit Telemetry Metrics to Amazon CloudWatch
         cw_info = {}
@@ -191,12 +187,13 @@ class FloodAgent:
             "run_id": orch_res.get("run_id"),
             "location": location,
             "severity": severity,
-            "escalation_tier": orch_res.get("escalation_tier", "ORANGE"),
+            "escalation_tier": orch_res["escalation_tier"],
+            "escalation_reasons": orch_res["escalation_reasons"],
             "classification": classification,
             "area_sq_km": area_sq_km,
             "peak_depth_m": peak_depth_m,
             "gauge_status": gauge_status,
-            "river_discharge_m3s": gauge_info.get("river_discharge_m3s", 850.0),
+            "river_discharge_m3s": gauge_info.get("river_discharge_m3s"),
             "rainfall_5day_mm": rainfall_5day,
             "antecedent_rain_5d_mm": rain_details["antecedent_rain_5d_mm"],
             "forecast_rain_24h_mm": rain_details["forecast_rain_24h_mm"],
@@ -206,19 +203,21 @@ class FloodAgent:
             "facilities": facilities_at_risk,
             "report": report_text,
             "report_format": report_format,
+            "validation": orch_res["report_validation"],
             "agent_nodes_status": orch_res.get("agent_nodes_status", {}),
             "agent_statuses": orch_res.get("agent_nodes_status", {}),
             "mcp_provenance": orch_res.get("mcp_provenance", []),
             "mcp_audit_log": orch_res.get("mcp_provenance", []),
             "cap_alert": orch_res.get("cap_alert", {}),
-            "hitl_draft_id": orch_res.get("hitl_draft_id"),
+            "hitl_draft_id": draft_id,
             "hitl_pending": hitl_pending,
+            "voice_dispatched": voice_dispatched,
             "evacuation": orch_res.get("evacuation", {}),
             "urnn": urnn_data,
             "target_phones": target_phones,
             "aws_cloud": {
                 "s3_report": s3_report_info,
-                "sns_broadcast": sns_info,
+                "sns_broadcast": voice_dispatched.get("aws_dispatch", {}).get("sns", {}),
                 "polly_audio": polly_info,
                 "cloudwatch_telemetry": cw_info,
             },
@@ -238,9 +237,9 @@ class FloodAgent:
                 "item_id": item.get("draft_id"),
                 "draft_id": item.get("draft_id"),
                 "action_type": "CAP_ALERT_AND_VOICE_DISPATCH",
-                "location": item.get("location", "Patna, Bihar"),
-                "severity": item.get("severity", "CRITICAL"),
-                "target_phones": [cap.get("target_demo_phone", "+917678656930")],
+                "location": item.get("location"),
+                "severity": item.get("severity"),
+                "target_phones": [item["target_phone"]] if item.get("target_phone") else [],
                 "language": "hi",
                 "created_at": item.get("created_at"),
                 "status": "PENDING" if "PENDING" in st.upper() else st,
@@ -248,13 +247,13 @@ class FloodAgent:
             })
         return formatted
 
-    def approve_hitl_action(self, item_id: str, language: str = "hi"):
+    def approve_hitl_action(self, item_id: str, approved_by: str, language: str = "hi"):
         """Approves a pending HITL draft and dispatches CAP Voice + AWS SNS + AWS Polly."""
-        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, language=language)
-        loc = res.get("draft", {}).get("location", "Patna, Bihar")
-        sev = res.get("draft", {}).get("severity", "CRITICAL")
+        res = self.orchestrator.approve_and_dispatch_hitl(draft_id=item_id, approved_by=approved_by, language=language)
+        loc = res["draft"]["location"]
+        sev = res["draft"]["severity"]
         try:
-            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=0.82)
+            sns_res = sns_service.broadcast_flood_warning(location=loc, severity_level=sev, water_depth_m=res["draft"]["max_depth_m"])
             polly_res = polly_service.synthesize_emergency_alert(
                 f"HITL Approved Emergency Alert for {loc}. Severity: {sev}.",
                 language="hi-IN" if str(language).lower().startswith("hi") else "en-IN",

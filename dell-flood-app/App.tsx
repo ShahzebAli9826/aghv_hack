@@ -13,8 +13,8 @@ import { ChatbotPanel } from './src/components/ChatbotPanel';
 import { TriagePanel } from './src/components/TriagePanel';
 import { NowcastPanel } from './src/components/NowcastPanel';
 import { ReportViewerModal } from './src/components/ReportViewerModal';
-import { apiService, DEFAULT_API_URL, DetectionResult, CrowdReport, ShelterInfo } from './src/services/api';
-import { AppLanguage, t, DEFAULT_DEMO_PHONE_E164 } from './src/utils/i18n';
+import { apiService, DEFAULT_API_URL, DEMO_CALL_RECIPIENT, DetectionResult, CrowdReport, ShelterInfo } from './src/services/api';
+import { AppLanguage, t } from './src/utils/i18n';
 
 type TabType = 'map' | 'report' | 'raise' | 'agent' | 'nowcast' | 'triage' | 'settings';
 
@@ -344,6 +344,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    apiService.clearSession();
     seenComplaintIdsRef.current.clear();
     isInitialDashboardFetchRef.current = true;
     setRole('none');
@@ -438,11 +439,10 @@ export default function App() {
   };
 
   const handleVoiceCallTrigger = async (phoneNum: string, severity: string, locationName?: string) => {
-    const targetNumber = phoneNum || DEFAULT_DEMO_PHONE_E164;
     const alertMessage = `Emergency Alert: Active ${severity} water levels verified near your location. Route paths are updated. Please evacuate to the nearest safe shelter immediately.`;
     try {
       const res = await apiService.triggerVoiceCall(
-        targetNumber,
+        phoneNum,
         alertMessage,
         {
           location: locationName || `${activeLat.toFixed(2)}N, ${activeLon.toFixed(2)}E`,
@@ -455,12 +455,12 @@ export default function App() {
         setExpandedComplaintId(null);
         triggerNotification(
           "Twilio Voice Call Outbound",
-          `Automated ${appLanguage === 'hi' ? 'Hindi (Polly.Aditi)' : 'English (alice)'} warning call dialed to ${targetNumber}.`,
+          `Automated ${appLanguage === 'hi' ? 'Hindi (Polly.Aditi)' : 'English (alice)'} warning call dialed to ${res.target}.`,
           "info"
         );
       }
-    } catch (e) {
-      Alert.alert('Error', 'Voice gateway request failed.');
+    } catch (e: any) {
+      triggerNotification("Voice Call Not Placed", e?.message || 'Voice gateway request failed.', "warning");
     }
   };
 
@@ -1750,10 +1750,10 @@ export default function App() {
 
                                   <TouchableOpacity 
                                     style={styles.actionMenuItem}
-                                    onPress={() => handleVoiceCallTrigger(DEFAULT_DEMO_PHONE_E164, c.severity, displayPlace)}
+                                    onPress={() => handleVoiceCallTrigger(DEMO_CALL_RECIPIENT, c.severity, displayPlace)}
                                   >
                                     <PhoneCall size={14} color="#dc2626" />
-                                    <Text style={styles.actionMenuText}>📞 Trigger Twilio Voice Alert Call (+917678656930)</Text>
+                                    <Text style={styles.actionMenuText}>📞 Trigger Twilio Voice Alert Call (demo recipient)</Text>
                                   </TouchableOpacity>
 
                                   <TouchableOpacity 

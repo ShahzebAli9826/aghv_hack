@@ -7,6 +7,20 @@ export const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/
   default: 'http://192.168.1.7:8000/api'
 });
 
+// Test number for the demo voice-call buttons. Empty by default, so those buttons place no call.
+export const DEMO_CALL_RECIPIENT = process.env.EXPO_PUBLIC_DEMO_CALL_RECIPIENT?.trim() ?? '';
+
+const JWT_STORAGE_KEY = 'aegis_jwt_token';
+
+type BackendRequestInit = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
+
+// Only requests to the Aegis backend go through here, so third-party geocoders never receive the token.
+async function authFetch(url: string, init: BackendRequestInit = {}): Promise<Response> {
+  const token = await AsyncStorage.getItem(JWT_STORAGE_KEY).catch(() => null);
+  if (!token) return fetch(url, init);
+  return fetch(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
+}
+
 export interface ImpactStats {
   population: number;
   buildings: number;
@@ -63,23 +77,23 @@ export interface ShelterInfo {
 }
 
 let mockReports: CrowdReport[] = [
-  { id: 1, username: 'anil_bihar', lat: 25.6120, lon: 85.1320, location_name: 'Ganga Ghat Road, Patna, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Ganga river overflowing at Ghat road.', timestamp: Date.now() / 1000 - 1800, status: 'pending', model_confirmed: 1, score: 96.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 2, username: 'citizens_patna', lat: 25.6135, lon: 85.1380, location_name: 'Main Market Square, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Heavy waterlogging near market square.', timestamp: Date.now() / 1000 - 3600, status: 'pending', model_confirmed: 1, score: 85.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 3, username: 'ngo_rescue', lat: 26.1212, lon: 85.3640, location_name: 'Health Center, Muzaffarpur, Bihar', severity: 'SEVERE', description: '[Categories: Rescue Needed] Critical waterlogging at health center.', timestamp: Date.now() / 1000 - 7200, status: 'resolved', model_confirmed: 1, score: 94.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 4, username: 'saif', lat: 25.6124, lon: 85.1376, location_name: 'Patna Main Market Square, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Inundation detected along main commercial axis.', timestamp: Date.now() / 1000 - 9000, status: 'pending', model_confirmed: 1, score: 95.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 5, username: 'saif', lat: 25.6140, lon: 85.1410, location_name: 'Rajendra Nagar Terminus, Patna', severity: 'HIGH', description: '[Categories: Infrastructure Risk] Railway underpass submerged under 3ft water.', timestamp: Date.now() / 1000 - 10800, status: 'pending', model_confirmed: 1, score: 88.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 6, username: 'saif', lat: 25.6080, lon: 85.1290, location_name: 'Kankarbagh Colony, Patna', severity: 'MODERATE', description: '[Categories: Drainage Failure] Storm water drains overflowing into residential lanes.', timestamp: Date.now() / 1000 - 14400, status: 'pending', model_confirmed: 1, score: 82.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 7, username: 'Komal', lat: 28.7497, lon: 77.1145, location_name: 'Hari Nagar Block B, West Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Street drainage choked after continuous cloudburst.', timestamp: Date.now() / 1000 - 18000, status: 'pending', model_confirmed: 1, score: 79.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 8, username: 'Komal', lat: 28.6334, lon: 77.1111, location_name: 'Hari Nagar Market Area, Delhi', severity: 'SEVERE', description: '[Categories: Rescue Needed] Basement shops submerged, urgent power cutoff requested.', timestamp: Date.now() / 1000 - 21600, status: 'pending', model_confirmed: 1, score: 93.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 9, username: 'citizen_test', lat: 28.6139, lon: 77.2090, location_name: 'Connaught Place Outer Circle, New Delhi', severity: 'MODERATE', description: '[Categories: Traffic Stalled] Road traffic stalled due to localized flash inundation.', timestamp: Date.now() / 1000 - 25200, status: 'pending', model_confirmed: 1, score: 76.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 10, username: 'Komal', lat: 28.5487, lon: 77.1207, location_name: 'Aerocity Access Road, Delhi', severity: 'MINOR', description: '[Categories: Water Logging] Shallow water accumulation along curbside.', timestamp: Date.now() / 1000 - 28800, status: 'pending', model_confirmed: 0, score: 58.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 11, username: 'assam_sdrf', lat: 26.9500, lon: 94.2167, location_name: 'Kamalabari Ghat, Majuli, Assam', severity: 'CRITICAL', description: '[Categories: Embankment Breach] Brahmaputra flood wave breached ring bund.', timestamp: Date.now() / 1000 - 32400, status: 'pending', model_confirmed: 1, score: 98.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 12, username: 'assam_sdrf', lat: 26.6500, lon: 93.3500, location_name: 'Kaziranga National Park Range, Assam', severity: 'CRITICAL', description: '[Categories: Wildlife & Rural] Highway NH-715 submerged, animal corridor flooded.', timestamp: Date.now() / 1000 - 36000, status: 'pending', model_confirmed: 1, score: 97.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 13, username: 'ngo_rescue', lat: 26.1520, lon: 85.8950, location_name: 'Darbhanga University Environs, Bihar', severity: 'HIGH', description: '[Categories: Relief Camp] Relief camp approach road inundated.', timestamp: Date.now() / 1000 - 39600, status: 'pending', model_confirmed: 1, score: 87.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 14, username: 'citizen_bihar', lat: 25.5941, lon: 85.1376, location_name: 'Boring Road Crossing, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Roadway waterlogged up to vehicle tyres.', timestamp: Date.now() / 1000 - 43200, status: 'pending', model_confirmed: 1, score: 75.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 15, username: 'saif_official', lat: 25.6124, lon: 85.1376, location_name: 'Patna Collectorate Area, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] NDRF pump de-watering completed at primary sector.', timestamp: Date.now() / 1000 - 46800, status: 'resolved', model_confirmed: 1, score: 92.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 16, username: 'official_bihar', lat: 26.1220, lon: 85.3620, location_name: 'Muzaffarpur Collectorate Campus, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] Sump pump operating at normal levels.', timestamp: Date.now() / 1000 - 50400, status: 'resolved', model_confirmed: 1, score: 91.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" },
-  { id: 17, username: 'sdrf_unit4', lat: 28.7501, lon: 77.1147, location_name: 'West Delhi Outer Drain Channel, Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Water clearance operations ongoing.', timestamp: Date.now() / 1000 - 54000, status: 'pending', model_confirmed: 1, score: 80.0, phone: "+917678656930", email: "rawalrajat044@gmail.com" }
+  { id: 1, username: 'anil_bihar', lat: 25.6120, lon: 85.1320, location_name: 'Ganga Ghat Road, Patna, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Ganga river overflowing at Ghat road.', timestamp: Date.now() / 1000 - 1800, status: 'pending', model_confirmed: 1, score: 96.0, email: "rawalrajat044@gmail.com" },
+  { id: 2, username: 'citizens_patna', lat: 25.6135, lon: 85.1380, location_name: 'Main Market Square, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Heavy waterlogging near market square.', timestamp: Date.now() / 1000 - 3600, status: 'pending', model_confirmed: 1, score: 85.0, email: "rawalrajat044@gmail.com" },
+  { id: 3, username: 'ngo_rescue', lat: 26.1212, lon: 85.3640, location_name: 'Health Center, Muzaffarpur, Bihar', severity: 'SEVERE', description: '[Categories: Rescue Needed] Critical waterlogging at health center.', timestamp: Date.now() / 1000 - 7200, status: 'resolved', model_confirmed: 1, score: 94.0, email: "rawalrajat044@gmail.com" },
+  { id: 4, username: 'saif', lat: 25.6124, lon: 85.1376, location_name: 'Patna Main Market Square, Bihar', severity: 'SEVERE', description: '[Categories: Water Logging] Inundation detected along main commercial axis.', timestamp: Date.now() / 1000 - 9000, status: 'pending', model_confirmed: 1, score: 95.0, email: "rawalrajat044@gmail.com" },
+  { id: 5, username: 'saif', lat: 25.6140, lon: 85.1410, location_name: 'Rajendra Nagar Terminus, Patna', severity: 'HIGH', description: '[Categories: Infrastructure Risk] Railway underpass submerged under 3ft water.', timestamp: Date.now() / 1000 - 10800, status: 'pending', model_confirmed: 1, score: 88.0, email: "rawalrajat044@gmail.com" },
+  { id: 6, username: 'saif', lat: 25.6080, lon: 85.1290, location_name: 'Kankarbagh Colony, Patna', severity: 'MODERATE', description: '[Categories: Drainage Failure] Storm water drains overflowing into residential lanes.', timestamp: Date.now() / 1000 - 14400, status: 'pending', model_confirmed: 1, score: 82.0, email: "rawalrajat044@gmail.com" },
+  { id: 7, username: 'Komal', lat: 28.7497, lon: 77.1145, location_name: 'Hari Nagar Block B, West Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Street drainage choked after continuous cloudburst.', timestamp: Date.now() / 1000 - 18000, status: 'pending', model_confirmed: 1, score: 79.0, email: "rawalrajat044@gmail.com" },
+  { id: 8, username: 'Komal', lat: 28.6334, lon: 77.1111, location_name: 'Hari Nagar Market Area, Delhi', severity: 'SEVERE', description: '[Categories: Rescue Needed] Basement shops submerged, urgent power cutoff requested.', timestamp: Date.now() / 1000 - 21600, status: 'pending', model_confirmed: 1, score: 93.0, email: "rawalrajat044@gmail.com" },
+  { id: 9, username: 'citizen_test', lat: 28.6139, lon: 77.2090, location_name: 'Connaught Place Outer Circle, New Delhi', severity: 'MODERATE', description: '[Categories: Traffic Stalled] Road traffic stalled due to localized flash inundation.', timestamp: Date.now() / 1000 - 25200, status: 'pending', model_confirmed: 1, score: 76.0, email: "rawalrajat044@gmail.com" },
+  { id: 10, username: 'Komal', lat: 28.5487, lon: 77.1207, location_name: 'Aerocity Access Road, Delhi', severity: 'MINOR', description: '[Categories: Water Logging] Shallow water accumulation along curbside.', timestamp: Date.now() / 1000 - 28800, status: 'pending', model_confirmed: 0, score: 58.0, email: "rawalrajat044@gmail.com" },
+  { id: 11, username: 'assam_sdrf', lat: 26.9500, lon: 94.2167, location_name: 'Kamalabari Ghat, Majuli, Assam', severity: 'CRITICAL', description: '[Categories: Embankment Breach] Brahmaputra flood wave breached ring bund.', timestamp: Date.now() / 1000 - 32400, status: 'pending', model_confirmed: 1, score: 98.0, email: "rawalrajat044@gmail.com" },
+  { id: 12, username: 'assam_sdrf', lat: 26.6500, lon: 93.3500, location_name: 'Kaziranga National Park Range, Assam', severity: 'CRITICAL', description: '[Categories: Wildlife & Rural] Highway NH-715 submerged, animal corridor flooded.', timestamp: Date.now() / 1000 - 36000, status: 'pending', model_confirmed: 1, score: 97.0, email: "rawalrajat044@gmail.com" },
+  { id: 13, username: 'ngo_rescue', lat: 26.1520, lon: 85.8950, location_name: 'Darbhanga University Environs, Bihar', severity: 'HIGH', description: '[Categories: Relief Camp] Relief camp approach road inundated.', timestamp: Date.now() / 1000 - 39600, status: 'pending', model_confirmed: 1, score: 87.0, email: "rawalrajat044@gmail.com" },
+  { id: 14, username: 'citizen_bihar', lat: 25.5941, lon: 85.1376, location_name: 'Boring Road Crossing, Patna, Bihar', severity: 'MODERATE', description: '[Categories: Water Logging] Roadway waterlogged up to vehicle tyres.', timestamp: Date.now() / 1000 - 43200, status: 'pending', model_confirmed: 1, score: 75.0, email: "rawalrajat044@gmail.com" },
+  { id: 15, username: 'saif_official', lat: 25.6124, lon: 85.1376, location_name: 'Patna Collectorate Area, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] NDRF pump de-watering completed at primary sector.', timestamp: Date.now() / 1000 - 46800, status: 'resolved', model_confirmed: 1, score: 92.0, email: "rawalrajat044@gmail.com" },
+  { id: 16, username: 'official_bihar', lat: 26.1220, lon: 85.3620, location_name: 'Muzaffarpur Collectorate Campus, Bihar', severity: 'SEVERE', description: '[Categories: Resolved Action] Sump pump operating at normal levels.', timestamp: Date.now() / 1000 - 50400, status: 'resolved', model_confirmed: 1, score: 91.0, email: "rawalrajat044@gmail.com" },
+  { id: 17, username: 'sdrf_unit4', lat: 28.7501, lon: 77.1147, location_name: 'West Delhi Outer Drain Channel, Delhi', severity: 'MODERATE', description: '[Categories: Water Logging] Water clearance operations ongoing.', timestamp: Date.now() / 1000 - 54000, status: 'pending', model_confirmed: 1, score: 80.0, email: "rawalrajat044@gmail.com" }
 ];
 
 let mockShelters: ShelterInfo[] = [
@@ -88,14 +102,12 @@ let mockShelters: ShelterInfo[] = [
   { id: 3, name: "Darbhanga College Relief Camp", lat: 26.1520, lon: 85.8950, capacity: "grey", slots: 0 }
 ];
 
-let mockAgentLogs: string[] = [];
-
 // Static mock user storage supporting strict password verification (only used if useMock is explicitly true)
 const localMockUsers: Record<string, { role: string; phone: string; password: string }> = {
-  "saif": { role: "official", phone: "+917678656930", password: "123" },
-  "shah": { role: "citizen", phone: "+917678656930", password: "123" },
-  "saif_official": { role: "official", phone: "+917678656930", password: "123" },
-  "admin": { role: "official", phone: "+917678656930", password: "123" }
+  "saif": { role: "official", phone: "", password: "123" },
+  "shah": { role: "citizen", phone: "", password: "123" },
+  "saif_official": { role: "official", phone: "", password: "123" },
+  "admin": { role: "official", phone: "", password: "123" }
 };
 
 export const apiService = {
@@ -168,7 +180,7 @@ export const apiService = {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${this.apiUrl}/auth/register`, {
+      const res = await authFetch(`${this.apiUrl}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, role, phone, expo_push_token: expoPushToken }),
@@ -200,7 +212,7 @@ export const apiService = {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4500);
-      const res = await fetch(`${this.apiUrl}/auth/login`, {
+      const res = await authFetch(`${this.apiUrl}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, expo_push_token: expoPushToken }),
@@ -213,7 +225,7 @@ export const apiService = {
       }
       const data = await res.json();
       if (data.token) {
-        await AsyncStorage.setItem('aegis_jwt_token', data.token).catch(() => {});
+        await AsyncStorage.setItem(JWT_STORAGE_KEY, data.token).catch(() => {});
       }
       return data;
     } catch (err: any) {
@@ -233,13 +245,17 @@ export const apiService = {
     }
   },
 
+  async clearSession() {
+    await AsyncStorage.removeItem(JWT_STORAGE_KEY).catch(() => {});
+  },
+
   // 2. Fetch satellite preview (returns optical & SAR side-by-side)
   async getSatellitePreview(lat: number, lon: number): Promise<{ optical_preview: string; sar_preview: string; timestamp: string; source?: string }> {
     if (this.useMock) throw new Error("Mock mode is enabled. Turn it off in Settings to request Sentinel Hub imagery.");
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 180000);
     try {
-      const res = await fetch(`${this.apiUrl}/preview?lat=${lat}&lon=${lon}`, { signal: controller.signal });
+      const res = await authFetch(`${this.apiUrl}/preview?lat=${lat}&lon=${lon}`, { signal: controller.signal });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.detail || `Satellite preview failed (HTTP ${res.status}).`);
       if (!payload.optical_preview || !payload.sar_preview) throw new Error("Sentinel Hub returned an incomplete satellite preview.");
@@ -263,7 +279,7 @@ export const apiService = {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 180000);
     try {
-      const startRes = await fetch(`${this.apiUrl}/run-detection?lat=${lat}&lon=${lon}&cloud_cover=${cloudCover}`, {
+      const startRes = await authFetch(`${this.apiUrl}/run-detection?lat=${lat}&lon=${lon}&cloud_cover=${cloudCover}`, {
         method: "POST", signal: controller.signal
       });
       const startPayload = await startRes.json().catch(() => ({}));
@@ -271,7 +287,7 @@ export const apiService = {
       const { job_id } = startPayload;
       if (!job_id) throw new Error("Backend did not return an inference job ID.");
       for (;;) {
-        const statusRes = await fetch(`${this.apiUrl}/status/${job_id}`, { signal: controller.signal });
+        const statusRes = await authFetch(`${this.apiUrl}/status/${job_id}`, { signal: controller.signal });
         const statusObj = await statusRes.json().catch(() => ({}));
         if (!statusRes.ok) throw new Error(statusObj.detail || `Inference status failed (HTTP ${statusRes.status}).`);
         onProgress?.(statusObj);
@@ -317,7 +333,6 @@ export const apiService = {
       status: 'pending',
       model_confirmed: confirmed,
       score: calcScore,
-      phone: "+917678656930",
       email: "rawalrajat044@gmail.com"
     };
 
@@ -359,7 +374,7 @@ export const apiService = {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${this.apiUrl}/report-flood`, {
+        const res = await authFetch(`${this.apiUrl}/report-flood`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -404,7 +419,7 @@ export const apiService = {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(`${this.apiUrl}/complaints/list`, {
+        const res = await authFetch(`${this.apiUrl}/complaints/list`, {
           signal: controller.signal
         });
         clearTimeout(timeoutId);
@@ -422,37 +437,23 @@ export const apiService = {
       }
     }
 
-    try {
-      const savedOfflineReports = await AsyncStorage.getItem('aegis_offline_reports');
-      if (savedOfflineReports) {
-        const parsed = JSON.parse(savedOfflineReports);
-        if (Array.isArray(parsed)) {
-          const existingIds = new Set(mockReports.map(r => r.id));
-          parsed.forEach((r: CrowdReport) => {
-            if (!existingIds.has(r.id)) mockReports.unshift(r);
-          });
+    if (this.useMock) {
+      try {
+        const savedOfflineReports = await AsyncStorage.getItem('aegis_offline_reports');
+        if (savedOfflineReports) {
+          const parsed = JSON.parse(savedOfflineReports);
+          if (Array.isArray(parsed)) {
+            const existingIds = new Set(mockReports.map(r => r.id));
+            parsed.forEach((r: CrowdReport) => {
+              if (!existingIds.has(r.id)) mockReports.unshift(r);
+            });
+          }
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
 
-    // Combine backend complaints + mockReports/offline reports (preventing duplicates)
-    const combinedMap = new Map<string, CrowdReport>();
-    
-    // First seed backend complaints
-    backendComplaints.forEach(r => {
-      const key = r.id ? `id-${r.id}` : `${r.username}-${r.lat.toFixed(4)}-${r.lon.toFixed(4)}`;
-      combinedMap.set(key, r);
-    });
-
-    // Then merge mockReports (so user's locally submitted reports are always present!)
-    mockReports.forEach(r => {
-      const key = r.id ? `id-${r.id}` : `${r.username}-${r.lat.toFixed(4)}-${r.lon.toFixed(4)}`;
-      if (!combinedMap.has(key)) {
-        combinedMap.set(key, r);
-      }
-    });
-
-    const combined = Array.from(combinedMap.values());
+    // Mock and locally cached reports appear only in mock mode; the official list is the backend's.
+    const combined = this.useMock ? [...mockReports] : backendComplaints;
     const active = combined.filter(c => c.status !== 'resolved').length;
     const resolved = combined.filter(c => c.status === 'resolved').length;
     
@@ -494,7 +495,7 @@ export const apiService = {
     }
 
     try {
-      const res = await fetch(`${this.apiUrl}/complaints/resolve`, {
+      const res = await authFetch(`${this.apiUrl}/complaints/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ complaint_id: id })
@@ -507,43 +508,38 @@ export const apiService = {
     return { status: "SUCCESS" };
   },
 
-  // 7. Twilio Multilingual Voice Call Trigger (Defaults to +917678656930 — P34)
+  // 7. Twilio Multilingual Voice Call Trigger (P34). An empty recipient places no call.
   async triggerVoiceCall(
-    phoneNumber: string = "+917678656930",
+    phoneNumber: string,
     message: string = "",
     options?: { location?: string; severity?: string; language?: "en" | "hi"; max_depth_m?: number }
   ): Promise<any> {
-    const targetPhone = phoneNumber && phoneNumber.trim() ? phoneNumber.trim() : "+917678656930";
-    try {
-      const res = await fetch(`${this.apiUrl}/alerts/voice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone_number: targetPhone,
-          message,
-          location: options?.location || "Patna District",
-          severity: options?.severity || "CRITICAL",
-          language: options?.language || "hi",
-          max_depth_m: options?.max_depth_m ?? 0.68,
-        })
-      });
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.log("[Twilio API] Backend voice trigger unreachable. Falling back to mock console output.");
+    const targetPhone = phoneNumber.trim();
+    if (!targetPhone) {
+      throw new Error('No recipient phone number is configured (EXPO_PUBLIC_DEMO_CALL_RECIPIENT); no call was placed.');
     }
-
-    return {
-      status: "SUCCESS",
-      target_phone: targetPhone,
-      language: options?.language || "hi",
-      script_spoken: message || "आपतकालीन बाढ़ चेतावनी! कृपया तुरंत ऊंचे सुरक्षित आश्रय स्थल की ओर प्रस्थान करें।",
-      message: `Voice alert dispatched to ${targetPhone}.`
-    };
+    const res = await authFetch(`${this.apiUrl}/alerts/voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone_number: targetPhone,
+        message,
+        location: options?.location || "Patna District",
+        severity: options?.severity || "CRITICAL",
+        language: options?.language || "hi",
+        max_depth_m: options?.max_depth_m ?? 0.68,
+      })
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.detail || `Voice call failed (HTTP ${res.status}).`);
+    }
+    return result;
   },
 
   // 8. SMTP alert trigger
   async triggerEmailAlert(toEmail: string, subject: string, message: string): Promise<any> {
-    const res = await fetch(`${this.apiUrl}/alerts/email`, {
+    const res = await authFetch(`${this.apiUrl}/alerts/email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ to_email: toEmail, subject, message })
@@ -557,7 +553,7 @@ export const apiService = {
 
   // 9. LLM situation report compiler SMTP trigger
   async triggerEmailReport(payload: any): Promise<any> {
-    const res = await fetch(`${this.apiUrl}/alerts/email-report`, {
+    const res = await authFetch(`${this.apiUrl}/alerts/email-report`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -595,17 +591,17 @@ export const apiService = {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 180000);
     try {
-      const res = await fetch(`${this.apiUrl}/agent-cycle`, {
+      const res = await authFetch(`${this.apiUrl}/agent-cycle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           location,
           lat,
           lon,
-          phones: options?.phones || ["+917678656930"],
+          phones: options?.phones ?? [],
           report_format: options?.report_format || "DM_EXECUTIVE",
           language: options?.language || "en",
-          require_hitl_for_calls: options?.require_hitl_for_calls ?? false,
+          require_hitl_for_calls: options?.require_hitl_for_calls ?? true,
         }),
         signal: controller.signal,
       });
@@ -618,69 +614,7 @@ export const apiService = {
       if (error?.name === 'AbortError') {
         throw new Error('Agent cycle timed out after 3 minutes. Check the backend and Sentinel Hub connection.');
       }
-      console.warn("[AgentCycle] Backend execution offline or unreachable, returning local multi-agent telemetry:", error);
-
-      const nowStr = new Date().toLocaleTimeString();
-      const mockLogs = [
-        `[${nowStr}] [Supervisor] Initialized 6-Agent Incident Command Graph for ${location} (${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E)`,
-        `[${nowStr}] [WeatherSentinel] Fetched Open-Meteo telemetry: 78.4mm rainfall, active convective precipitation`,
-        `[${nowStr}] [HydrologySentinel] Querying CWC river gauge: Danger Level +0.42m, discharge 18,400 m³/s`,
-        `[${nowStr}] [SatelliteVisionAgent] SegFormer MiT-B2 SAR+Optical Inundation Extent: 2.34 km² (Confidence 91.2%)`,
-        `[${nowStr}] [GISImpactRouterAgent] OSM Spatial Join: 1,840 population affected, 412 buildings exposed, safe evacuation ETA: 16 min`,
-        `[${nowStr}] [AlertDispatcherAgent] OASIS CAP v1.2 Alert generated & bilingual voice alert drafted for +917678656930`,
-        `[${nowStr}] [RAGReportCompilerAgent] SOP Situation Report compiled with verified numeric grounding`,
-        `[${nowStr}] [AWS S3] SITREP PDF vaulted to s3://aegis-disaster-vault/reports/ (Presigned URL Ready)`,
-        `[${nowStr}] [AWS Polly] Neural Bilingual Voice synthesized (Aditi hi-IN / Raveena en-IN)`,
-        `[${nowStr}] [AWS SNS] Emergency Topic broadcast dispatched to Aegis-Flash-Flood-Alerts`,
-        `[${nowStr}] [AWS CloudWatch] Telemetry published to Namespace Aegis/DisasterResponse (Severity=8.4)`
-      ];
-
-      const mockReport = `OFFICIAL SITUATION REPORT: ${location.toUpperCase()}\n` +
-        `Generated: ${new Date().toLocaleString()}\n` +
-        `Classification: Active Inundation & Street-Level Flood\n` +
-        `Severity: HIGH | Inundation Extent: 2.34 km²\n\n` +
-        `1. METEOROLOGICAL & HYDROLOGICAL SUMMARY:\n` +
-        `Intense localized precipitation observed over the past 24 hours. CWC River Gauge indicates levels near warning thresholds.\n\n` +
-        `2. POPULATION & INFRASTRUCTURE IMPACT:\n` +
-        `- Affected Population: ~1,840 citizens\n` +
-        `- Exposed Structures: ~412 residential and commercial buildings\n` +
-        `- Priority Routes: Arterial roads submerged >25cm; detours established to Sector High-Ground Relief Camp.\n\n` +
-        `3. TACTICAL DIRECTIVE & RELIEF:\n` +
-        `- SDRF / NDRF motorized inflatable rescue units deployed to low-lying sectors.\n` +
-        `- Human-in-the-Loop emergency outbound voice alert and CAP v1.2 XML drafted for dispatch.`;
-
-      return {
-        status: "SUCCESS",
-        location,
-        severity: "HIGH",
-        classification: "Flood Inundation & Riverine Overflow",
-        area_sq_km: 2.34,
-        rainfall_5day_mm: 78.4,
-        gauge_status: "WARNING",
-        confidence: 91,
-        population: 1840,
-        buildings: 412,
-        peak_depth_60m: 0.68,
-        evac_eta_min: 16,
-        logs: mockLogs,
-        report: mockReport,
-        report_format: options?.report_format || "DM_EXECUTIVE",
-        result: {
-          location,
-          severity: "HIGH",
-          classification: "Flood Inundation & Riverine Overflow",
-          area_sq_km: 2.34,
-          rainfall_5day_mm: 78.4,
-          gauge_status: "WARNING",
-          confidence: 91,
-          population: 1840,
-          buildings: 412,
-          peak_depth_60m: 0.68,
-          evac_eta_min: 16,
-          logs: mockLogs,
-          report: mockReport,
-        }
-      };
+      throw error;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -688,7 +622,7 @@ export const apiService = {
 
   async getAgentTrace(location: string): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/agent-trace?location=${location}`);
+      const res = await authFetch(`${this.apiUrl}/agent-trace?location=${location}`);
       if (res.ok) return await res.json();
     } catch (e) {}
 
@@ -705,7 +639,7 @@ export const apiService = {
   // RAG Chatbot QA
   async askQuestion(question: string, lastResult?: DetectionResult): Promise<string> {
     try {
-      const res = await fetch(`${this.apiUrl}/agent/chat`, {
+      const res = await authFetch(`${this.apiUrl}/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: question, lastResult })
@@ -765,7 +699,7 @@ export const apiService = {
 
   async broadcastNotification(location: string, severity: string, area_sq_km: number, message: string = ""): Promise<any> {
     try {
-      const res = await fetch(`${DEFAULT_API_URL}/notifications/broadcast`, {
+      const res = await authFetch(`${DEFAULT_API_URL}/notifications/broadcast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location, severity, area_sq_km, message })
@@ -791,7 +725,7 @@ export const apiService = {
     language?: string;
   }): Promise<{ status: string; report: string }> {
     try {
-      const res = await fetch(`${this.apiUrl}/reports/preview`, {
+      const res = await authFetch(`${this.apiUrl}/reports/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -808,7 +742,7 @@ export const apiService = {
 
   async getAssamTop10Preview(): Promise<{ status: string; hotspots: any[] }> {
     try {
-      const res = await fetch(`${this.apiUrl}/reports/assam-top10/preview`);
+      const res = await authFetch(`${this.apiUrl}/reports/assam-top10/preview`);
       if (res.ok) return await res.json();
     } catch (e) {
       console.log("Error loading Assam Top-10 preview from backend: ", e);
@@ -1018,7 +952,7 @@ export const apiService = {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2500);
-      const backendRes = await fetch(`${this.apiUrl}/geocode?q=${encodeURIComponent(q)}`, {
+      const backendRes = await authFetch(`${this.apiUrl}/geocode?q=${encodeURIComponent(q)}`, {
         signal: controller.signal
       });
       clearTimeout(timeoutId);
@@ -1110,7 +1044,7 @@ export const apiService = {
   // --- Intelligent MirEye + Google Gemini 2.5 Flash Chatbot ---
   async sendChatMessage(message: string, conversationHistory?: any[], locationContext?: any): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/chat/message`, {
+      const res = await authFetch(`${this.apiUrl}/chat/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1136,7 +1070,7 @@ export const apiService = {
   // --- Predictive TWI & Forward Pooling ---
   async predictTwi(lat: number, lon: number, patchRadiusKm: number = 1.5, rainfallForecast: number = 50.0): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aegis/twi/predict`, {
+      const res = await authFetch(`${this.apiUrl}/aegis/twi/predict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1172,7 +1106,7 @@ export const apiService = {
   // --- Elevation-Weighted Evacuation Plan ---
   async getEvacuationPlan(originLat: number, originLon: number, targetLat?: number, targetLon?: number): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aegis/evacuation/plan`, {
+      const res = await authFetch(`${this.apiUrl}/aegis/evacuation/plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1221,7 +1155,7 @@ export const apiService = {
   // --- Day 10 Triage & Course Correction ---
   async runTriage(countyOrPolygon: string = 'Athens County, Ohio'): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aegis/triage/run`, {
+      const res = await authFetch(`${this.apiUrl}/aegis/triage/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ county_or_polygon: countyOrPolygon })
@@ -1261,7 +1195,7 @@ export const apiService = {
 
   async applyTriageOverride(runThreadId: string, overrides: any[]): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aegis/triage/override`, {
+      const res = await authFetch(`${this.apiUrl}/aegis/triage/override`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1343,7 +1277,7 @@ export const apiService = {
           drainage_eff: String(drainageEff),
         });
         if (rainMmHr !== undefined) q.set('rain_mm_hr', String(rainMmHr));
-        const res = await fetch(`${this.apiUrl}/nowcast?${q.toString()}`, {
+        const res = await authFetch(`${this.apiUrl}/nowcast?${q.toString()}`, {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -1429,7 +1363,7 @@ export const apiService = {
   // --- HITL Approval Queue & MCP Provenance Ledger (P26, P27, P28, P34) ---
   async getHitlQueue(status: string = 'PENDING'): Promise<any[]> {
     try {
-      const res = await fetch(`${this.apiUrl}/hitl/queue?status=${encodeURIComponent(status)}`);
+      const res = await authFetch(`${this.apiUrl}/hitl/queue?status=${encodeURIComponent(status)}`);
       if (res.ok) {
         const data = await res.json();
         return data.items || [];
@@ -1438,21 +1372,22 @@ export const apiService = {
     return [];
   },
 
-  async approveHitlItem(itemId: number | string, language: 'en' | 'hi' = 'hi'): Promise<any> {
-    try {
-      const res = await fetch(`${this.apiUrl}/hitl/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id: itemId, language }),
-      });
-      if (res.ok) return await res.json();
-    } catch (e) {}
-    return { status: 'SUCCESS', target_phone: '+917678656930' };
+  async approveHitlItem(itemId: string, language: 'en' | 'hi' = 'hi'): Promise<any> {
+    const res = await authFetch(`${this.apiUrl}/hitl/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId, language }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.detail || `HITL approval failed (HTTP ${res.status}).`);
+    }
+    return result;
   },
 
   async getMcpAuditLog(limit: number = 20): Promise<any[]> {
     try {
-      const res = await fetch(`${this.apiUrl}/mcp/audit-log?limit=${limit}`);
+      const res = await authFetch(`${this.apiUrl}/mcp/audit-log?limit=${limit}`);
       if (res.ok) {
         const data = await res.json();
         return data.entries || data.ledger || [];
@@ -1464,7 +1399,7 @@ export const apiService = {
   // --- AWS Free Tier & AWS Agent Toolkit (MCP) Integration Helpers ---
   async getAwsStatus(): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aws/status`);
+      const res = await authFetch(`${this.apiUrl}/aws/status`);
       if (res.ok) return await res.json();
     } catch (e) {}
     return {
@@ -1489,25 +1424,16 @@ export const apiService = {
   },
 
   async executeMcpTool(toolName: string, args: Record<string, any> = {}): Promise<any> {
-    try {
-      const res = await fetch(`${this.apiUrl}/mcp/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool_name: toolName, arguments: args }),
-      });
-      if (res.ok) return await res.json();
-    } catch (e) {}
-    return {
-      status: 'SUCCESS',
-      tool_name: toolName,
-      data: { simulated: true, arguments: args },
-      provenance: {
-        execution_id: `mcp_sim_${Date.now().toString(16).slice(-6)}`,
-        tool_name: toolName,
-        latency_ms: 14.2,
-        sha256_hash: 'a8f4c2910e7b3d12',
-      },
-    };
+    const res = await authFetch(`${this.apiUrl}/mcp/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_name: toolName, arguments: args }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.detail || `MCP tool ${toolName} failed (HTTP ${res.status}).`);
+    }
+    return result;
   },
 
   async runAwsMcpDiagnosticSuite(location: string = 'Patna District', lat: number = 25.6124, lon: number = 85.1376): Promise<any> {
@@ -1516,7 +1442,7 @@ export const apiService = {
 
   async getAwsTelemetry(): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aws/telemetry`);
+      const res = await authFetch(`${this.apiUrl}/aws/telemetry`);
       if (res.ok) return await res.json();
     } catch (e) {}
     return { namespace: 'Aegis/DisasterResponse', history: [] };
@@ -1524,7 +1450,7 @@ export const apiService = {
 
   async triggerSnsBroadcast(location: string, severityLevel: string = 'CRITICAL', waterDepthM: number = 1.4): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/alerts/broadcast-sns`, {
+      const res = await authFetch(`${this.apiUrl}/alerts/broadcast-sns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location, severity_level: severityLevel, water_depth_m: waterDepthM }),
@@ -1541,7 +1467,7 @@ export const apiService = {
 
   async synthesizePollyVoice(text: string, language: 'hi-IN' | 'en-IN' = 'hi-IN'): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/alerts/voice-polly`, {
+      const res = await authFetch(`${this.apiUrl}/alerts/voice-polly`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, language }),
@@ -1559,7 +1485,7 @@ export const apiService = {
 
   async translateAdvisoryAws(text: string, targetLanguage: string = 'hi', location: string = 'Patna District'): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aws/translate`, {
+      const res = await authFetch(`${this.apiUrl}/aws/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, target_language: targetLanguage, location }),
@@ -1585,7 +1511,7 @@ export const apiService = {
 
   async provisionAwsResources(): Promise<any> {
     try {
-      const res = await fetch(`${this.apiUrl}/aws/provision`, { method: 'POST' });
+      const res = await authFetch(`${this.apiUrl}/aws/provision`, { method: 'POST' });
       if (res.ok) return await res.json();
     } catch (e) {}
     return {

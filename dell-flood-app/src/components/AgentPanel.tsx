@@ -32,10 +32,19 @@ import {
   AlertTriangle,
   Database,
 } from 'lucide-react-native';
-import { apiService, DetectionResult } from '../services/api';
-import { AppLanguage, t, DEFAULT_DEMO_PHONE_E164 } from '../utils/i18n';
+import { apiService, DetectionResult, DEMO_CALL_RECIPIENT } from '../services/api';
+import { AppLanguage, t } from '../utils/i18n';
 
 const IS_COMPACT_LAYOUT = Platform.OS !== 'web' || Dimensions.get('window').width < 600;
+
+// react-native-web implements Alert.alert as a no-op.
+const notify = (title: string, message: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
 
 interface AgentPanelProps {
   lastResult: DetectionResult | null;
@@ -108,6 +117,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const [showMcpModal, setShowMcpModal] = useState<boolean>(false);
   const [awsSuiteRunning, setAwsSuiteRunning] = useState<boolean>(false);
   const [awsSuiteResult, setAwsSuiteResult] = useState<any | null>(null);
+  const [cycleError, setCycleError] = useState<string | null>(null);
 
   const loadGovernanceData = async () => {
     try {
@@ -148,6 +158,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     setLogs([]);
     setReport('');
     setSummary(null);
+    setCycleError(null);
 
     try {
       let targetLat = activeLat;
@@ -174,6 +185,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const response = await apiService.runAgentCycle(locationName, targetLat, targetLon, {
         report_format: reportFormat,
         language: lang,
+        phones: DEMO_CALL_RECIPIENT ? [DEMO_CALL_RECIPIENT] : [],
       });
 
       const logList = response.logs || response.result?.logs || [];
@@ -218,7 +230,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       }
       await loadGovernanceData();
     } catch (e: any) {
-      Alert.alert('Execution Notice', e.message || 'Agent cycle completed with fallback telemetry.');
+      setCycleError(e?.message || 'Agent cycle failed.');
     } finally {
       setRunningAgent(false);
     }
@@ -256,7 +268,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const loc = summary?.location || locationName || 'Patna District';
       const area = summary?.area_sq_km || lastResult?.area_sq_km || 3.4;
       const res = await apiService.triggerVoiceCall(
-        DEFAULT_DEMO_PHONE_E164,
+        DEMO_CALL_RECIPIENT,
         `Emergency Alert for ${loc}: ${sev} flood risk over ${area} sq km.`,
         {
           location: loc,
@@ -265,28 +277,31 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           max_depth_m: summary?.peak_depth_60m || 1.2,
         }
       );
-      const scriptText = res.script || res.script_spoken || res.message || 'Voice call dispatched.';
-      if (Platform.OS === 'web') {
-        window.alert(`📞 Outbound Voice Call to ${DEFAULT_DEMO_PHONE_E164} (${lang === 'hi' ? 'Hindi Polly.Aditi' : 'English alice'}):\n\n${scriptText}`);
-      } else {
-        Alert.alert(`📞 Outbound Call (${DEFAULT_DEMO_PHONE_E164})`, scriptText);
-      }
+      const scriptText = res.speech || res.message || 'Voice call dispatched.';
+      notify(
+        `📞 Outbound Voice Call to ${res.target} (${lang === 'hi' ? 'Hindi Polly.Aditi' : 'English alice'})`,
+        scriptText
+      );
     } catch (e: any) {
-      Alert.alert('Voice Gateway Notice', e?.message || 'Could not trigger voice call.');
+      notify('Voice Gateway Notice', e?.message || 'Could not trigger voice call.');
     } finally {
       setCallingVoice(false);
     }
   };
 
-  const handleApproveHitl = async (itemId: number) => {
+  const handleApproveHitl = async (itemId: string) => {
     try {
       const res = await apiService.approveHitlItem(itemId, lang);
-      if (res.status === 'SUCCESS') {
-        Alert.alert('HITL Broadcast Approved', `Emergency voice alert & CAP v1.2 dispatched to ${DEFAULT_DEMO_PHONE_E164}.`);
-        loadGovernanceData();
-      }
+      const target = res.dispatch_receipt?.target;
+      notify(
+        'HITL Broadcast Approved',
+        target
+          ? `Emergency voice alert & CAP v1.2 dispatched to ${target}.`
+          : 'CAP v1.2 alert approved. The draft has no valid recipient phone, so no call was placed.'
+      );
+      loadGovernanceData();
     } catch (e: any) {
-      Alert.alert('Approval Error', e?.message || 'Requires Official role token.');
+      notify('Approval Error', e?.message || 'Requires Official role token.');
     }
   };
 
@@ -540,10 +555,20 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           </View>
         </View>
 
+        {cycleError && (
+          <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
+            <View style={styles.cardHeaderRow}>
+              <AlertTriangle size={18} color="#dc2626" />
+              <Text style={[styles.cardHeaderTitle, { color: '#991b1b' }]}>Agent cycle failed</Text>
+            </View>
+            <Text style={{ fontSize: 12, color: '#7f1d1d' }}>{cycleError}</Text>
+          </View>
+        )}
+
         {/* ========================================================= */}
         {/* 2B. HUMAN-IN-THE-LOOP (HITL) EMERGENCY APPROVAL QUEUE      */}
         {/* ========================================================= */}
-        {hitlItems.filter((h) => h.status === 'PENDING_OFFICIAL_APPROVAL').length > 0 && (
+        {hitlItems.filter((h) => h.status === 'PENDING').length > 0 && (
           <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
             <View style={styles.cardHeaderRow}>
               <AlertTriangle size={18} color="#dc2626" />
@@ -552,21 +577,21 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               </Text>
             </View>
             {hitlItems
-              .filter((h) => h.status === 'PENDING_OFFICIAL_APPROVAL')
+              .filter((h) => h.status === 'PENDING')
               .slice(0, 3)
               .map((item) => (
-                <View key={item.id} style={styles.hitlRow}>
+                <View key={item.item_id} style={styles.hitlRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 12, fontWeight: '700', color: '#7f1d1d' }}>
                       {item.location} — {item.severity} ({item.area_sq_km} km²)
                     </Text>
                     <Text style={{ fontSize: 10.5, color: '#991b1b' }}>
-                      Pop at Risk: {item.population_affected?.toLocaleString()} | Target: {DEFAULT_DEMO_PHONE_E164}
+                      Pop at Risk: {item.population_affected?.toLocaleString()} | Target: {item.target_phones?.length ? item.target_phones.join(', ') : 'no recipient'}
                     </Text>
                   </View>
                   <TouchableOpacity
                     style={styles.hitlApproveBtn}
-                    onPress={() => handleApproveHitl(item.id)}
+                    onPress={() => handleApproveHitl(item.item_id)}
                   >
                     <Text style={styles.hitlApproveText}>Approve & Dial</Text>
                   </TouchableOpacity>

@@ -58,6 +58,10 @@ class YOLOXDualDepthHead(nn.Module):
         return p_wet * d_raw
 
 
+# The ConvGRU and YOLOX head carry no trained weights; depth comes from the hand-written ponding formula.
+DEPTH_PROVENANCE = "heuristic_untrained"
+
+
 class URNNHydroNowcaster:
     """
     3-Scale ConvGRU + YOLOX Dual-Head Spatiotemporal Nowcaster with
@@ -170,6 +174,7 @@ class URNNHydroNowcaster:
         return {
             "latency_ms": latency_ms,
             "speedup_vs_mike_plus": "140x faster",
+            "depth_provenance": DEPTH_PROVENANCE,
             "telemetry": bundle["telemetry"],
             "horizon_metrics": horizon_metrics,
             "depth_b64_maps": depth_b64_maps,
@@ -258,6 +263,7 @@ class URNNHydroNowcaster:
             "horizons_min": [0, 15, 30, 60],
             "latency_ms": raw["latency_ms"],
             "speedup_vs_mike_plus": raw["speedup_vs_mike_plus"],
+            "depth_provenance": raw["depth_provenance"],
             "max_depth_0m": hm["t_0m"]["max_depth_m"],
             "max_depth_15m": hm["t_15m"]["max_depth_m"],
             "max_depth_30m": hm["t_30m"]["max_depth_m"],
