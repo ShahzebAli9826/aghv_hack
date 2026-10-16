@@ -117,6 +117,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const [showMcpModal, setShowMcpModal] = useState<boolean>(false);
   const [awsSuiteRunning, setAwsSuiteRunning] = useState<boolean>(false);
   const [awsSuiteResult, setAwsSuiteResult] = useState<any | null>(null);
+  const [cycleError, setCycleError] = useState<string | null>(null);
 
   const loadGovernanceData = async () => {
     try {
@@ -157,6 +158,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     setLogs([]);
     setReport('');
     setSummary(null);
+    setCycleError(null);
 
     try {
       let targetLat = activeLat;
@@ -228,7 +230,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       }
       await loadGovernanceData();
     } catch (e: any) {
-      Alert.alert('Execution Notice', e.message || 'Agent cycle completed with fallback telemetry.');
+      setCycleError(e?.message || 'Agent cycle failed.');
     } finally {
       setRunningAgent(false);
     }
@@ -552,6 +554,16 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             </TouchableOpacity>
           </View>
         </View>
+
+        {cycleError && (
+          <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
+            <View style={styles.cardHeaderRow}>
+              <AlertTriangle size={18} color="#dc2626" />
+              <Text style={[styles.cardHeaderTitle, { color: '#991b1b' }]}>Agent cycle failed</Text>
+            </View>
+            <Text style={{ fontSize: 12, color: '#7f1d1d' }}>{cycleError}</Text>
+          </View>
+        )}
 
         {/* ========================================================= */}
         {/* 2B. HUMAN-IN-THE-LOOP (HITL) EMERGENCY APPROVAL QUEUE      */}

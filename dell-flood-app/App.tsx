@@ -344,6 +344,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    apiService.clearSession();
     seenComplaintIdsRef.current.clear();
     isInitialDashboardFetchRef.current = true;
     setRole('none');
