@@ -701,6 +701,60 @@ def test_cancel_stops_run():
     assert len(fake.calls(f"POST {AGENT}/v1/runs/run_c/cancel")) == 1
 
 
+def _broken_finalize(items):
+    raise RuntimeError("finalize bug")
+
+
+def test_compose_failure_still_finishes_run_with_minimal_failed_record():
+    product = PRODUCTS[ProductId.helplines]
+    PRODUCTS[ProductId.helplines] = dataclasses.replace(product, finalize=_broken_finalize)
+    try:
+        service = make_service(make_settings(mode=Mode.replay, api_key=None))
+        started = time.time()
+        run = run_and_wait(service, [ProductId.helplines])
+        elapsed = time.time() - started
+    finally:
+        PRODUCTS[ProductId.helplines] = product
+    assert elapsed < 5
+    assert (run.state, run.error, run.evidence) == (RunState.failed, "internal error: RuntimeError", [])
+    assert service.store.get_run(run.run_id).state is RunState.failed
+
+
+class TerminalSaveFails(IntelStore):
+    def save_run(self, run, request_key=None):
+        if run.state not in (RunState.queued, RunState.running):
+            raise sqlite3.OperationalError("database is locked")
+        super().save_run(run, request_key)
+
+
+def test_final_save_failure_still_releases_run():
+    records = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = logging.getLogger("aegis.intel.runner")
+    handler = Capture(level=logging.ERROR)
+    logger.addHandler(handler)
+    try:
+        store = TerminalSaveFails(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
+        service = build_service(make_settings(mode=Mode.replay, api_key=None), store=store,
+                                resolver=public_resolver, sleep=lambda s: None, today=lambda: date(2026, 10, 16))
+        request = RunRequest(location=SIWAN, products=(ProductId.river_levels,))
+        first = service.runner.start(request)
+        started = time.time()
+        service.runner.wait(first.run_id, 5)
+        elapsed = time.time() - started
+        second = service.runner.start(request)
+        service.runner.wait(second.run_id, 5)
+    finally:
+        logger.removeHandler(handler)
+    assert elapsed < 4
+    assert second.run_id != first.run_id
+    assert f"web-intel run {first.run_id} could not be saved" in records
+
+
 def test_restart_marks_inflight_runs_interrupted():
     store = IntelStore(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
     now = datetime.now(timezone.utc)

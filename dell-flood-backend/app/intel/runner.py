@@ -703,12 +703,30 @@ class IntelRunner:
                 })
                 handle.live_view = None
         finally:
-            self._save(handle)
-            with self._lock:
-                self._active.pop(handle.run.run_id, None)
-                if self._inflight.get(request.key) == handle.run.run_id:
-                    del self._inflight[request.key]
-            handle.done.set()
+            try:
+                self._save_final(handle)
+            finally:
+                with self._lock:
+                    self._active.pop(handle.run.run_id, None)
+                    if self._inflight.get(request.key) == handle.run.run_id:
+                        del self._inflight[request.key]
+                handle.done.set()
+
+    def _save_final(self, handle: _Handle) -> None:
+        try:
+            run = self.snapshot(handle)
+        except Exception:  # noqa: BLE001 - compose failed; store what is known without it
+            log.exception("web-intel run %s could not be composed", handle.run.run_id)
+            with handle.lock:
+                handle.run = handle.run.model_copy(update={
+                    "state": RunState.failed, "finished_at": handle.run.finished_at or self._now(),
+                    "error": handle.run.error or "internal error: could not compose the run",
+                })
+                run = handle.run
+        try:
+            self.store.save_run(run, handle.request.key)
+        except Exception:  # noqa: BLE001 - the run must still be released below
+            log.exception("web-intel run %s could not be saved", run.run_id)
 
     def shutdown(self) -> None:
         self._run_pool.shutdown(wait=False, cancel_futures=True)
