@@ -124,6 +124,7 @@ def _describe_products(today: date) -> list[dict]:
                 "source_type": s.source_type.value, "jurisdictions": sorted(s.jurisdictions),
                 "verified": s.verified, "in_season": s.in_season(today),
                 "allow_readonly_lookup": s.allow_readonly_lookup, "notes": s.notes,
+                "start_url": s.start_url, "monitorable": s.monitorable,
             }
             for s in (SOURCES[sid] for sid in product.source_ids)
         ]
@@ -208,6 +209,7 @@ def get_config(_: dict = Official, service: IntelService = Depends(get_service))
         "schema_version": SCHEMA_VERSION,
         "mode": service.runner.mode.value,
         "enabled": service.runner.mode is not Mode.disabled,
+        "disabled_reason": service.settings.disabled_reason if service.runner.mode is Mode.disabled else None,
         "products": [p.describe() for p in PRODUCTS.values()],
         "default_products": [p.value for p in DEFAULT_PRODUCTS],
         "limits": service.settings.limits(),
@@ -279,17 +281,25 @@ def delete_monitor(monitor_id: str, _: dict = Official, service: IntelService = 
 @intel_router.post("/webhook")
 async def webhook(request: Request, token: str | None = Query(default=None, max_length=200),
                   service: IntelService = Depends(get_service)) -> dict:
-    raw = await request.body()
-    if len(raw) > MAX_WEBHOOK_BYTES:
-        raise HTTPException(status_code=413, detail="payload too large")
     try:
-        payload = json.loads(raw or b"null")
+        service.monitors.authorize_webhook(token)
+    except WebhookUnauthorized:
+        raise HTTPException(status_code=401, detail="invalid webhook token") from None
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="payload too large")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="payload too large")
+        chunks.append(chunk)
+    try:
+        payload = json.loads(b"".join(chunks) or b"null")
     except ValueError:
         payload = None
     try:
-        return service.monitors.handle_webhook(payload, token)
-    except WebhookUnauthorized:
-        raise HTTPException(status_code=401, detail="invalid webhook token") from None
+        return service.monitors.handle_webhook(payload)
     except MonitorUnavailable as exc:
         return {"status": "ignored", "reason": str(exc)}
     except TinyFishError as exc:

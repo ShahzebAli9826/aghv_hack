@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -21,7 +22,11 @@ from app.intel.sources import SOURCES, url_rejection
 from app.intel.store import IntelStore
 from app.intel.tinyfish_client import TinyFishClient, TinyFishError
 
+log = logging.getLogger("aegis.intel.monitors")
+
 _CRON = re.compile(r"^(\S+\s+){4}\S+$")
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_INVALID_ID = {"status": "ignored", "reason": "invalid id"}
 MAX_MONITORS = 50
 
 
@@ -101,8 +106,8 @@ class MonitorService:
             raise MonitorRequestError(f"TinyFish allows at most {MAX_MONITORS} monitors per account")
         if kind is MonitorKind.page:
             source = SOURCES.get(source_id or "")
-            if source is None or not source.start_url:
-                raise MonitorRequestError("page monitors need a registry source_id with a start_url")
+            if source is None or not source.monitorable:
+                raise MonitorRequestError("page monitors need a registry source whose start_url a fetch can read")
             if url_rejection(source.start_url, source.domains) is not None:
                 raise MonitorRequestError("source start_url is not allowlisted")
             if not source.verified and not self._settings.allow_unverified_sources:
@@ -130,9 +135,20 @@ class MonitorService:
             "products": [p.value for p in products], "schedule_cron": schedule_cron.strip(),
             "created_at": datetime.now(timezone.utc).isoformat(), "webhook_configured": self._webhook_url() is not None,
         }
-        record["baseline_hash"] = self._observe(record)
-        self._store.save_monitor(record)
+        try:
+            record["baseline_hash"] = self._observe(record)
+            self._store.save_monitor(record)
+        except BaseException:
+            self._delete_remote_quietly(client, monitor.id)
+            raise
         return _public(record)
+
+    def _delete_remote_quietly(self, client: TinyFishClient, monitor_id: str) -> None:
+        """A remote monitor with no local record would keep running and calling the webhook unseen."""
+        try:
+            client.delete_monitor(monitor_id)
+        except TinyFishError as exc:
+            log.warning("could not delete orphaned TinyFish monitor: %s", type(exc).__name__)
 
     def list(self) -> list[dict]:
         return [_public(r) for r in self._store.list_monitors()]
@@ -148,16 +164,23 @@ class MonitorService:
                 raise
         return self._store.delete_monitor(monitor_id)
 
-    def handle_webhook(self, payload: object, token: str | None) -> dict:
+    def authorize_webhook(self, token: str | None) -> None:
         expected = self._settings.webhook_token
         if not expected or not token or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
             raise WebhookUnauthorized("bad webhook token")
+
+    def handle_webhook(self, payload: object) -> dict:
+        """Act on a webhook body. The caller must have passed authorize_webhook first."""
         if not isinstance(payload, dict):
             return {"status": "ignored", "reason": "unrecognised payload"}
-        if payload.get("fetch_monitor_id") or payload.get("search_monitor_id"):
-            return self._monitor_event(payload)
+        monitor_id = payload.get("fetch_monitor_id") or payload.get("search_monitor_id")
+        if monitor_id:
+            event_id = payload.get("id") or ""
+            if not _plain_id(monitor_id) or (event_id and not _plain_id(event_id)):
+                return _INVALID_ID
+            return self._monitor_event(monitor_id, event_id)
         if payload.get("run_id") and payload.get("event"):
-            return self._run_event(str(payload["run_id"]))
+            return self._run_event(payload["run_id"]) if _plain_id(payload["run_id"]) else _INVALID_ID
         return {"status": "ignored", "reason": "unrecognised payload"}
 
     def _once(self, key: str, process) -> dict | None:
@@ -177,9 +200,7 @@ class MonitorService:
 
         return self._once(f"run:{run_id}", process) or {"status": "duplicate", "run_id": run_id}
 
-    def _monitor_event(self, payload: dict) -> dict:
-        monitor_id = str(payload.get("fetch_monitor_id") or payload.get("search_monitor_id"))
-        event_id = str(payload.get("id") or "")
+    def _monitor_event(self, monitor_id: str, event_id: str) -> dict:
         record = self._store.get_monitor(monitor_id)
         if record is None:
             return {"status": "ignored", "reason": "unknown monitor"}
@@ -204,6 +225,10 @@ class MonitorService:
         products = tuple(ProductId(p) for p in record.get("products") or []) or DEFAULT_PRODUCTS
         run = self._runner.start(RunRequest(location=location, products=products))
         return {"status": "change_detected", "monitor_id": monitor_id, "run_id": run.run_id}
+
+
+def _plain_id(value: object) -> bool:
+    return isinstance(value, str) and _ID.fullmatch(value) is not None
 
 
 def _public(record: dict) -> dict:
