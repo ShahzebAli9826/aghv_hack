@@ -696,6 +696,7 @@ class IntelRunner:
                 handle.live_view = None
         except Exception as exc:  # noqa: BLE001 - a run must always reach a terminal state
             log.exception("web-intel run %s crashed", handle.run.run_id)
+            handle.cancel_event.set()
             with handle.lock:
                 handle.run = handle.run.model_copy(update={
                     "state": RunState.failed, "finished_at": self._now(),

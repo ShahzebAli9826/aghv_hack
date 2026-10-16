@@ -720,6 +720,27 @@ def test_compose_failure_still_finishes_run_with_minimal_failed_record():
     assert service.store.get_run(run.run_id).state is RunState.failed
 
 
+def test_crashed_run_cancels_outstanding_agent_runs():
+    fake = FakeHTTP({
+        f"POST {AGENT}/v1/automation/run-async": httpx.Response(200, json={"run_id": "run_c", "error": None}),
+        f"GET {AGENT}/v1/runs/run_c": httpx.Response(200, json=run_body(None, status="RUNNING", run_id="run_c")),
+        f"POST {AGENT}/v1/runs/run_c/cancel": httpx.Response(200, json={"run_id": "run_c", "status": "CANCELLED"}),
+        "POST https://api.fetch.tinyfish.ai/": lambda r: _fetch_response("https://ndma.gov.in/en/contact-us", "x"),
+    })
+    product = PRODUCTS[ProductId.helplines]
+    PRODUCTS[ProductId.helplines] = dataclasses.replace(product, finalize=_broken_finalize)
+    try:
+        service = make_service(make_settings(poll_interval_s=0.01, run_timeout_s=60), tinyfish=fake)
+        run = run_and_wait(service, [ProductId.river_levels, ProductId.helplines])
+    finally:
+        PRODUCTS[ProductId.helplines] = product
+    deadline = time.time() + 3
+    while not fake.calls(f"POST {AGENT}/v1/runs/run_c/cancel") and time.time() < deadline:
+        time.sleep(0.01)
+    assert run.state is RunState.failed
+    assert len(fake.calls(f"POST {AGENT}/v1/runs/run_c/cancel")) == 1
+
+
 class TerminalSaveFails(IntelStore):
     def save_run(self, run, request_key=None):
         if run.state not in (RunState.queued, RunState.running):
