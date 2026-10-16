@@ -57,7 +57,10 @@ class EventBridgeStepFunctionsOrchestrator:
     ) -> Dict[str, Any]:
         """Publishes a structured disaster event to Amazon EventBridge."""
         event_id = f"evt-{uuid.uuid4().hex[:10]}"
-        if not dry_run and self.enabled and self._events:
+        if dry_run:
+            return {"provider": "AWS_EVENTBRIDGE_DRY_RUN", "event_bus": self.event_bus_name, "event_id": None,
+                    "source": source, "detail_type": detail_type, "detail": detail, "status": "DRY_RUN_NOT_PUBLISHED"}
+        if self.enabled and self._events:
             try:
                 resp = self._events.put_events(
                     Entries=[
@@ -113,7 +116,10 @@ class EventBridgeStepFunctionsOrchestrator:
             "initiated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-        if not dry_run and self.enabled and self._sfn and "000000000000" not in self.state_machine_arn:
+        if dry_run:
+            return {"provider": "AWS_STEP_FUNCTIONS_DRY_RUN", "execution_arn": None,
+                    "state_machine_arn": self.state_machine_arn, "input": input_payload, "status": "DRY_RUN_NOT_STARTED"}
+        if self.enabled and self._sfn and "000000000000" not in self.state_machine_arn:
             try:
                 resp = self._sfn.start_execution(
                     stateMachineArn=self.state_machine_arn,

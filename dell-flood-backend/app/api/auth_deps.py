@@ -19,14 +19,16 @@ def explicit_secret(name: str) -> Optional[str]:
 
 
 def configured_workers() -> int:
-    """Worker count from WEB_CONCURRENCY or uvicorn's --workers (spawned workers inherit the parent's argv)."""
+    """Worker count from WEB_CONCURRENCY or a --workers/-w flag (spawned workers inherit the parent's argv)."""
     counts = [os.getenv("WEB_CONCURRENCY", "")]
     argv = sys.argv[1:]
     for i, arg in enumerate(argv):
-        if arg == "--workers" and i + 1 < len(argv):
+        if arg in ("--workers", "-w") and i + 1 < len(argv):
             counts.append(argv[i + 1])
         elif arg.startswith("--workers="):
             counts.append(arg.split("=", 1)[1])
+        elif arg.startswith("-w") and arg[2:].isdigit():
+            counts.append(arg[2:])
     return max([int(c) for c in counts if c.strip().isdigit()] or [1])
 
 

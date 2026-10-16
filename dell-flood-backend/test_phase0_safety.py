@@ -510,6 +510,30 @@ def test_dispatch_failure_is_recorded_and_can_be_retried():
         assert again.status_code == 409
 
 
+def test_retry_does_not_resend_legs_that_already_succeeded():
+    headers = _official_headers()
+    with _ModelProbability(0.95), _SnsRecorder() as sns:
+        draft_id = endpoints.agent.run_cycle(
+            location="Phase0 Partial Dispatch", lat=25.6124, lon=85.1376, phones=["+15555550123"], language="en",
+        )["hitl_draft_id"]
+
+        def sns_down(**kwargs):
+            raise ConnectionError("SNS endpoint unreachable")
+
+        sns_service.broadcast_flood_warning = sns_down
+        with _VoiceGateway() as first:
+            failed = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+        assert failed.status_code == 502, failed.text
+        assert _draft_row(draft_id)["dispatch_error"] == "ConnectionError: SNS endpoint unreachable"
+
+        sns_service.broadcast_flood_warning = lambda **kwargs: sns.calls.append(kwargs) or {"status": "RECORDED"}
+        with _VoiceGateway() as second:
+            retried = client.post("/api/hitl/approve", json={"item_id": draft_id}, headers=headers)
+    assert retried.status_code == 200, retried.text
+    assert (len(first.calls), len(second.calls), len(sns.calls)) == (1, 0, 1)
+    assert retried.json()["dispatch_receipt"]["target"] == "+15555550123"
+
+
 class _RacingConnection:
     """sqlite3 shim: another approver wins the draft just before this connection's first UPDATE."""
 

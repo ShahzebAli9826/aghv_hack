@@ -76,11 +76,15 @@ def registry_shelters(lat: float, lon: float) -> List[Dict[str, Any]]:
         return []
     out = []
     for name, s_lat, s_lon, status_colour, slots in rows:
+        if s_lat is None or s_lon is None:
+            continue
         distance = _km(lat, lon, float(s_lat), float(s_lon))
         if distance <= REGISTRY_RADIUS_KM:
+            free = max(0, int(slots or 0))
+            # The registry's capacity column is a colour status, so total capacity is unknown.
             out.append({
                 "name": name, "lat": float(s_lat), "lon": float(s_lon), "elevation_m": None,
-                "capacity": int(slots or 0), "slots_available": int(slots or 0), "status_colour": status_colour,
+                "capacity": None, "slots_available": free, "status_colour": status_colour,
                 "distance_km": round(distance, 2), "source": REGISTRY,
                 "provenance": "operator shelter registry (flood_database.db shelters table)",
             })

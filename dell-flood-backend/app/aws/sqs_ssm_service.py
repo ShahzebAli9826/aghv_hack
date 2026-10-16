@@ -64,10 +64,13 @@ class SQSAndSSMConfigService:
             "enqueued_at_utc": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
         }
+        if dry_run:
+            return {"provider": "AWS_SQS_DRY_RUN", "message_id": None, "queue_url": self.queue_url,
+                    "payload": payload, "status": "DRY_RUN_NOT_ENQUEUED"}
         self._local_queue.insert(0, entry)
         self._local_queue = self._local_queue[:50]
 
-        if not dry_run and self.enabled and self._sqs and "000000000000" not in self.queue_url:
+        if self.enabled and self._sqs and "000000000000" not in self.queue_url:
             try:
                 resp = self._sqs.send_message(
                     QueueUrl=self.queue_url,

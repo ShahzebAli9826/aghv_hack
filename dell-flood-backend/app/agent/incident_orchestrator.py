@@ -442,7 +442,7 @@ class MultiAgentIncidentOrchestrator:
                 },
             )
             draft_id = f"hitl_{uuid.uuid4().hex[:8]}"
-            self._save_hitl_draft(
+            saved = self._save_hitl_draft(
                 draft_id=draft_id,
                 run_id=run_id,
                 location=location,
@@ -457,12 +457,18 @@ class MultiAgentIncidentOrchestrator:
                 target_phone=target_phone,
                 web_intel=web_intel,
             )
-            nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
-            logs.append(
-                f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script "
-                f"{'for the requested recipient' if target_phone else 'with no recipient (approval will not place a call)'}. "
-                f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
-            )
+            if not saved:
+                draft_id = None
+                degraded["CommsAgent"] = "the CAP draft could not be saved to the HITL queue"
+                nodes_status["CommsAgent"] = "FAILED"
+                logs.append("[CommsAgent] FAILED: the CAP draft could not be saved, so nothing is queued for approval.")
+            else:
+                nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
+                logs.append(
+                    f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script "
+                    f"{'for the requested recipient' if target_phone else 'with no recipient (approval will not place a call)'}. "
+                    f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
+                )
 
         return {
             "run_id": run_id,
@@ -507,7 +513,7 @@ class MultiAgentIncidentOrchestrator:
         cap_payload: Dict[str, Any],
         target_phone: Optional[str],
         web_intel: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> bool:
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
@@ -541,8 +547,10 @@ class MultiAgentIncidentOrchestrator:
             )
             conn.commit()
             conn.close()
+            return True
         except Exception as e:
             print(f"[HITL Save Error] {e}")
+            return False
 
     @staticmethod
     def list_hitl_queue() -> List[Dict[str, Any]]:
@@ -589,44 +597,43 @@ class MultiAgentIncidentOrchestrator:
         draft = _row_view(row)
         lang = language or draft["language"]
         target_phone = normalize_and_validate_phone(draft["target_phone"])
-        aws_dispatch: Dict[str, Any] = {}
         error: Optional[str] = None
+        # Legs that succeeded on an earlier attempt are kept and never re-sent on a retry.
+        legs: Dict[str, Any] = dict((draft["dispatch_receipt"] or {}).get("legs") or {})
         if target_phone is None:
             print(f"[HITL] Draft {draft_id} approved by {approved_by} has no valid recipient; nothing was sent.")
             status = HITL_APPROVED_NO_RECIPIENT
             receipt: Dict[str, Any] = {"status": "NO_RECIPIENT", "detail": "Draft has no valid recipient phone number; nothing was sent."}
         else:
-            receipt = {}
-            try:
-                receipt = execute_mcp_tool(
-                    "dispatch_approved_alert",
-                    {
-                        "phone_number": target_phone,
-                        "location": draft["location"],
-                        "severity": draft["severity"],
-                        "language": lang,
-                        "max_depth_m": draft["max_depth_m"],
-                    },
-                )["data"]
-                aws_dispatch["sns"] = sns_service.broadcast_flood_warning(
+            senders = (
+                ("voice", lambda: execute_mcp_tool("dispatch_approved_alert", {
+                    "phone_number": target_phone, "location": draft["location"], "severity": draft["severity"],
+                    "language": lang, "max_depth_m": draft["max_depth_m"],
+                })["data"]),
+                ("sns", lambda: sns_service.broadcast_flood_warning(
                     location=draft["location"], severity_level=draft["severity"], water_depth_m=draft["max_depth_m"],
-                )
-                aws_dispatch["polly"] = polly_service.synthesize_emergency_alert(
+                )),
+                ("polly", lambda: polly_service.synthesize_emergency_alert(
                     f"HITL Approved Emergency Alert for {draft['location']}. Severity: {draft['severity']}.",
                     language="hi-IN" if str(lang).lower().startswith("hi") else "en-IN",
-                )
+                )),
+            )
+            try:
+                for leg, send in senders:
+                    if leg not in legs:
+                        legs[leg] = send()
                 status = HITL_APPROVED
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"[:300]
                 status = HITL_DISPATCH_FAILED
-                receipt = {"status": HITL_DISPATCH_FAILED, "error": error, "partial": {"voice": receipt, **aws_dispatch}}
+            receipt = legs.get("voice") or {"status": HITL_DISPATCH_FAILED, "error": error}
 
         conn = sqlite3.connect(DB_PATH)
         try:
             conn.execute(
                 "UPDATE hitl_approvals SET status = ?, dispatch_receipt = ?, dispatch_error = ?, dispatched_at = ? "
                 "WHERE draft_id = ? AND status = ?",
-                (status, json.dumps(receipt, default=str), error, time.time(), draft_id, HITL_DISPATCHING),
+                (status, json.dumps({"legs": legs, "error": error}, default=str), error, time.time(), draft_id, HITL_DISPATCHING),
             )
             conn.commit()
         finally:
@@ -638,7 +645,7 @@ class MultiAgentIncidentOrchestrator:
             "status": status,
             "approved_by": approved_by,
             "dispatch_receipt": receipt,
-            "aws_dispatch": aws_dispatch,
+            "aws_dispatch": {k: v for k, v in legs.items() if k != "voice"},
             "draft": {**draft, "status": status, "approved_by": approved_by, "approved_at": approved_at},
         }
 

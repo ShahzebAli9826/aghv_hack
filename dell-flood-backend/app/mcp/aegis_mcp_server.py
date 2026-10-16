@@ -679,7 +679,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             location=location,
             severity=str(arguments.get("severity", "CRITICAL")),
             language=str(arguments.get("language", "hi")),
-            max_depth_m=float(arguments.get("max_depth_m", 0.78)),
+            max_depth_m=_optional_float(arguments.get("max_depth_m")),
         )
 
     elif tool_name == "aws_upload_report_s3":

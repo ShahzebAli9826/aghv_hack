@@ -330,7 +330,7 @@ def trigger_voice_call(payload: VoiceCallRequest):
     loc = payload.location or "Patna District"
     sev = payload.severity or "CRITICAL"
     lang = payload.language or "hi"
-    depth = payload.max_depth_m if payload.max_depth_m is not None else 0.68
+    depth = payload.max_depth_m
     res = agent_trigger_voice_call(
         phone_number=target_phone,
         message=payload.message or "",
@@ -343,7 +343,7 @@ def trigger_voice_call(payload: VoiceCallRequest):
     try:
         from app.aws import polly_service
         tts_lang = "hi-IN" if str(lang).lower().startswith("hi") else "en-IN"
-        script_txt = res.get("script_text") or payload.message or f"Emergency flood alert for {loc}. Projected depth {depth:.2f}m."
+        script_txt = res.get("script_text") or payload.message or f"Emergency flood alert for {loc}."
         if isinstance(res, dict):
             res["aws_polly"] = polly_service.synthesize_emergency_alert(script_txt, language=tts_lang)
     except Exception:

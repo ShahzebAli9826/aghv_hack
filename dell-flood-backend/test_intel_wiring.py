@@ -274,6 +274,19 @@ def test_segmentation_failure_degrades_instead_of_crashing():
     assert res["hitl_draft_id"].startswith("hitl_")
 
 
+def test_draft_with_unknown_depth_can_be_dispatched():
+    _fresh_env()
+    with _ModelMissing(), _GaugeDanger():
+        res = endpoints.agent.run_cycle(location="Patna, Bihar", lat=25.6124, lon=85.1376, phones=["+15555550123"],
+                                        language="en")
+    approved = client.post("/api/hitl/approve", json={"item_id": res["hitl_draft_id"], "language": "en"},
+                           headers=_official_headers())
+    assert approved.status_code == 200, approved.text
+    body = approved.json()
+    assert (body["status"], body["dispatch_receipt"]["target"]) == ("APPROVED_AND_DISPATCHED", "+15555550123")
+    assert "Projected Depth: not measured" in body["aws_dispatch"]["sns"]["message"]
+
+
 def test_web_evidence_failure_degrades_instead_of_crashing():
     service = _fresh_env()
 
@@ -408,8 +421,8 @@ def test_shelters_are_never_fabricated():
     assert (evac["status"], evac["destination"], evac["distance_km"]) == ("no_verified_shelters", None, None)
 
     registry = _mcp_data("find_safe_shelters", PATNA)
-    assert [(s["name"], s["source"], s["capacity"]) for s in registry["shelters"]] == [
-        ("Patna Stadium Shelter", "registry_shelters", 120)]
+    assert [(s["name"], s["source"], s["capacity"], s["slots_available"]) for s in registry["shelters"]] == [
+        ("Patna Stadium Shelter", "registry_shelters", None, 120)]
     alloc = _mcp_data("allocate_shelter_capacity", {**PATNA, "population_affected": 500})
     assert (alloc["status"], alloc["primary_shelter_allocated"], alloc["unallocated"]) == ("CAPACITY_SHORTFALL", 120, 380)
 
