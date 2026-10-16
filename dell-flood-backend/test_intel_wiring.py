@@ -202,7 +202,7 @@ def test_web_evidence_never_changes_escalation():
     def outcome(with_evidence, probability):
         service = _fresh_env()
         if with_evidence:
-            _store_run(service, _patna_evidence())
+            _store_run(service, _all_categories_evidence())
         with _ModelProbability(probability):
             res = orchestrator.run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
         return res["agent_nodes_status"]["WebEvidenceAgent"], (res["escalation_tier"], res["severity"], res["escalation_reasons"])
@@ -389,6 +389,94 @@ def test_mcp_web_intel_tools_write_provenance():
     ledger = client.get("/api/mcp/provenance").json()["ledger"]
     assert [e["tool_name"] for e in ledger[:2]] == ["web_intel_latest_evidence", "web_intel_get_run"]
     assert ledger[1]["web_intel"] == meta
+
+
+def _mcp_data(tool, arguments):
+    from app.mcp.aegis_mcp_server import execute_mcp_tool
+    return execute_mcp_tool(tool, arguments)["data"]
+
+
+def test_shelters_are_never_fabricated():
+    service = _fresh_env()
+    far = {"location": "Bengaluru", "lat": 12.9716, "lon": 77.5946}
+    assert _mcp_data("find_safe_shelters", far) == {"status": "no_verified_shelters", "shelters": [], "notes": [
+        "No relief camp in recent official evidence and no registry shelter within 50 km."]}
+    alloc = _mcp_data("allocate_shelter_capacity", {**far, "population_affected": 500})
+    assert (alloc["status"], alloc["allocated_population"], alloc["unallocated"], alloc["allocations"]) == (
+        "no_verified_shelters", 0, 500, [])
+    evac = _mcp_data("compute_dynamic_evacuation", far)
+    assert (evac["status"], evac["destination"], evac["distance_km"]) == ("no_verified_shelters", None, None)
+
+    registry = _mcp_data("find_safe_shelters", PATNA)
+    assert [(s["name"], s["source"], s["capacity"]) for s in registry["shelters"]] == [
+        ("Patna Stadium Shelter", "registry_shelters", 120)]
+    alloc = _mcp_data("allocate_shelter_capacity", {**PATNA, "population_affected": 500})
+    assert (alloc["status"], alloc["primary_shelter_allocated"], alloc["unallocated"]) == ("CAPACITY_SHORTFALL", 120, 380)
+
+    _store_run(service, [
+        _evidence(1, EvidenceCategory.relief_camp, "Relief camp listed: Gardanibagh High School, Ward 12",
+                  url="https://state.bihar.gov.in/disastermgmt/mock", product=ProductId.relief_camps,
+                  notes=["listed in an official report; not a guarantee of availability", "capacity as reported: 400"]),
+        _evidence(2, EvidenceCategory.relief_camp, "Relief camp listed: Rejected Row", status=ValidationStatus.rejected,
+                  product=ProductId.relief_camps),
+    ])
+    camps = _mcp_data("find_safe_shelters", PATNA)
+    assert camps["status"] == "web_relief_camps"
+    assert [(c["name"], c["capacity"], c["lat"], c["source_url"], c["mock"]) for c in camps["shelters"]] == [
+        ("Gardanibagh High School, Ward 12", 400, None, "https://state.bihar.gov.in/disastermgmt/mock", True)]
+    assert camps["shelters"][0]["geocode_confidence"] == "none: the report names the place only; not geocoded"
+    alloc = _mcp_data("allocate_shelter_capacity", {**PATNA, "population_affected": 500})
+    assert (alloc["primary_shelter_allocated"], alloc["shelter_listing"]["status"]) == (120, "web_relief_camps")
+
+
+def _all_categories_evidence():
+    return _patna_evidence() + [
+        _evidence(3, EvidenceCategory.rail_disruption, "13202 Patna-LTT Express cancelled (flooding near Danapur)",
+                  url="https://enquiry.indianrail.gov.in/mntes/mock", product=ProductId.mobility,
+                  source_type=SourceType.official, grade=Grade.verified_official),
+        _evidence(4, EvidenceCategory.road_closure, "NH-31 closed near Bakhtiyarpur", product=ProductId.mobility,
+                  status=ValidationStatus.rejected),
+        _evidence(5, EvidenceCategory.news_report, "Ganga crosses danger mark in Patna (mock)",
+                  url="https://www.thehindu.com/mock/patna", product=ProductId.news_corroboration,
+                  source_type=SourceType.secondary, grade=Grade.credible_secondary, signal=Signal.elevated),
+        _evidence(6, EvidenceCategory.helpline, "Control Room <main>: 0612-2256999",
+                  url="https://fmiscwrdbihar.gov.in/?a=1&b=2", product=ProductId.helplines),
+        _evidence(7, EvidenceCategory.helpline, "Helpline: 1800-000-1111", status=ValidationStatus.partial,
+                  product=ProductId.helplines),
+    ]
+
+
+def test_mobility_news_helplines_and_alerts_reach_their_consumers():
+    service = _fresh_env()
+    with _ModelProbability(0.95):
+        bare = incident_orchestrator.get_incident_orchestrator().run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
+    _store_run(service, _all_categories_evidence())
+    with _ModelProbability(0.95):
+        res = incident_orchestrator.get_incident_orchestrator().run_incident_graph("Patna, Bihar", 25.6124, 85.1376, language="en")
+
+    assert [(d["claim"], d["source_url"]) for d in res["evacuation"]["reported_disruptions"]] == [
+        ("13202 Patna-LTT Express cancelled (flooding near Danapur)", "https://enquiry.indianrail.gov.in/mntes/mock")]
+    assert (res["evacuation"]["destination"], res["evacuation"]["distance_km"]) == (
+        bare["evacuation"]["destination"], bare["evacuation"]["distance_km"])
+    assert bare["evacuation"]["reported_disruptions"] == []
+
+    reports = res["crowd"]["independent_reports"]
+    assert (reports["count"], reports["grade"], reports["affects_escalation"]) == (1, "credible_secondary", False)
+    assert [link["source_url"] for link in reports["links"]] == ["https://www.thehindu.com/mock/patna"]
+    assert (res["crowd"]["verification_score"], res["escalation_tier"]) == (bare["crowd"]["verification_score"], bare["escalation_tier"])
+
+    xml = res["cap_alert"]["xml"]
+    assert "1800-000-1111" not in xml and "&lt;main&gt;" in xml and "?a=1&amp;b=2" in xml
+    ns = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
+    info = ET.fromstring(xml).findall("cap:info", ns)
+    assert [(i.find("cap:contact", ns).text, i.find("cap:web", ns).text) for i in info] == [
+        ("Control Room <main>: 0612-2256999", "https://fmiscwrdbihar.gov.in/?a=1&b=2")] * 2
+    assert "<contact>" not in bare["cap_alert"]["xml"]
+
+    item = next(i for i in incident_orchestrator.MultiAgentIncidentOrchestrator.list_hitl_queue()
+                if i["draft_id"] == res["hitl_draft_id"])
+    assert [a["claim"] for a in item["web_evidence"]["active_official_alerts"]] == [
+        "Severe flood situation on Ganga at Patna (SACHET CAP)"]
 
 
 if __name__ == "__main__":

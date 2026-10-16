@@ -18,6 +18,7 @@ from app.agent.tools import (
     generate_multilingual_voice_script,
 )
 from app.api.auth_deps import require_official
+from app.agent import shelters as shelter_registry
 from app.mcp.web_intel_tools import WEB_INTEL_REGISTRY, WEB_INTEL_TOOLS, MCPToolInputError
 from app.aws import (
     s3_service,
@@ -133,10 +134,11 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "find_safe_shelters",
-        "description": "Finds high-ground relief shelters with elevation and capacity metadata.",
+        "description": "Lists shelters for a place: relief camps from the latest official report (web evidence, cited), "
+                       "else registry shelters within 50 km, else an empty list with status no_verified_shelters.",
         "inputSchema": {
             "type": "object",
-            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}, "location": {"type": "string"}},
             "required": ["lat", "lon"],
         },
         "requires_official_approval": False,
@@ -156,8 +158,13 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         "description": "Runs capacity-constrained shelter allocation with human-override support.",
         "inputSchema": {
             "type": "object",
-            "properties": {"population_affected": {"type": "integer"}, "location": {"type": "string"}},
-            "required": ["population_affected"],
+            "properties": {
+                "population_affected": {"type": "integer"},
+                "location": {"type": "string"},
+                "lat": {"type": "number"},
+                "lon": {"type": "number"},
+            },
+            "required": ["population_affected", "lat", "lon"],
         },
         "requires_official_approval": False,
     },
@@ -184,6 +191,11 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "area_sq_km": {"type": "number"},
                 "max_depth_m": {"type": "number"},
                 "language": {"type": "string"},
+                "helplines": {
+                    "type": "array",
+                    "description": "Web-evidence helplines; only items with validation_status verified are used.",
+                    "items": {"type": "object"},
+                },
             },
             "required": ["location", "lat", "lon", "severity"],
         },
@@ -447,6 +459,7 @@ def build_cap_v12_payload(
     area_sq_km: Optional[float] = 2.4,
     max_depth_m: Optional[float] = 0.72,
     language: str = "hi",
+    helplines: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Generates an ITU/WMO & NDMA SACHET Common Alerting Protocol (CAP v1.2)
@@ -465,6 +478,16 @@ def build_cap_v12_payload(
         else "flood extent and depth not measured: EO analysis unavailable"
     )
     loc_x = xml_escape(location)
+    verified = [h for h in helplines or [] if h.get("validation_status") == "verified" and h.get("number")]
+    contact_block = ""
+    if verified:
+        contact = "; ".join(f"{h.get('label') or 'Helpline'}: {h['number']}" for h in verified)
+        instruction = f"Verified helplines (listed by two official sources, retrieved via TinyFish): {contact}."
+        contact_block = (
+            f"\n    <instruction>{xml_escape(instruction)}</instruction>"
+            + (f"\n    <web>{xml_escape(verified[0]['source_url'])}</web>" if verified[0].get("source_url") else "")
+            + f"\n    <contact>{xml_escape(contact)}</contact>"
+        )
     area_desc = xml_escape(f"{location} ({extent})")
 
     cap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -483,7 +506,7 @@ def build_cap_v12_payload(
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
     <headline>आपातकालीन बाढ़ चेतावनी: {loc_x}</headline>
-    <description>{xml_escape(speech_hi)}</description>
+    <description>{xml_escape(speech_hi)}</description>{contact_block}
     <area>
       <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
@@ -497,7 +520,7 @@ def build_cap_v12_payload(
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
     <headline>Emergency Flood Alert: {loc_x}</headline>
-    <description>{xml_escape(speech_en)}</description>
+    <description>{xml_escape(speech_en)}</description>{contact_block}
     <area>
       <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
@@ -518,6 +541,7 @@ def build_cap_v12_payload(
         "script_hi": speech_hi,
         "script_en": speech_en,
         "xml": cap_xml,
+        "helplines": verified,
     }
 
 
@@ -616,26 +640,14 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         data = calculate_live_impact(lat, lon, area_sq_km=area_km2)
 
     elif tool_name == "find_safe_shelters":
-        data = {
-            "shelters": [
-                {"name": f"{location} High School Relief Center", "lat": round(lat + 0.014, 5), "lon": round(lon + 0.011, 5), "elevation_m": 64.2, "capacity": 650},
-                {"name": f"{location} NDRF Elevated Community Hall", "lat": round(lat - 0.012, 5), "lon": round(lon + 0.016, 5), "elevation_m": 66.8, "capacity": 500},
-            ]
-        }
+        data = shelter_registry.find_safe_shelters(location, lat, lon)
 
     elif tool_name == "compute_dynamic_evacuation":
         from app.aegis.routing.evacuation_engine import compute_elevation_evacuation_route
-        data = compute_elevation_evacuation_route(lat, lon)
+        data = compute_elevation_evacuation_route(lat, lon, shelter_registry.nearest_registry_shelter(lat, lon))
 
     elif tool_name == "allocate_shelter_capacity":
-        pop = int(arguments.get("population_affected", 1200))
-        data = {
-            "allocated_population": pop,
-            "primary_shelter_allocated": min(pop, 650),
-            "secondary_shelter_allocated": max(0, pop - 650),
-            "unallocated": 0,
-            "status": "CAPACITY_BALANCED",
-        }
+        data = shelter_registry.allocate(int(arguments["population_affected"]), location, lat, lon)
 
     elif tool_name == "verify_crowd_cluster":
         user_sev_weight = float(arguments.get("user_severity_weight", 88.0))
@@ -656,6 +668,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             area_sq_km=_optional_float(arguments.get("area_sq_km")),
             max_depth_m=_optional_float(arguments.get("max_depth_m")),
             language=str(arguments.get("language", "hi")),
+            helplines=arguments.get("helplines"),
         )
 
     elif tool_name == "dispatch_approved_alert":

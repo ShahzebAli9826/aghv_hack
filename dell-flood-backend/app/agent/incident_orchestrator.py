@@ -310,6 +310,7 @@ class MultiAgentIncidentOrchestrator:
             {"lat": lat, "lon": lon, "user_severity_weight": crowd_input["weight"], "model_prob_pct": model_prob_pct},
         )
         crowd_data["user_severity_provenance"] = crowd_input["provenance"]
+        crowd_data["independent_reports"] = web_evidence.independent_reports(web_intel)
         crowd_data["model_prob_provenance"] = (
             "segmentation confidence over flooded pixels" if flooded
             else "EO analysis failed; model probability set to 0" if "EOAnalystAgent" in degraded
@@ -332,12 +333,24 @@ class MultiAgentIncidentOrchestrator:
         if impact_data["population_affected"] is None:
             alloc_data = {"status": "SKIPPED", "reason": "population not estimated: EO analysis failed"}
         else:
-            alloc_data = invoke_mcp("allocate_shelter_capacity", {"population_affected": impact_data["population_affected"], "location": location})
+            alloc_data = invoke_mcp(
+                "allocate_shelter_capacity",
+                {"population_affected": impact_data["population_affected"], "location": location, "lat": lat, "lon": lon},
+            )
+        evac_data["reported_disruptions"] = web_evidence.reported_disruptions(web_intel)
         nodes_status["LogisticsAgent"] = "COMPLETED"
-        logs.append(
-            f"[LogisticsAgent] Time-Varying Dijkstra Route: {evac_data['distance_km']} km (ETA {evac_data['eta_minutes']} min), "
-            f"bypassed {evac_data['submerged_segments_bypassed']} submerging road segment(s)."
-        )
+        if evac_data["destination"] is None:
+            logs.append("[LogisticsAgent] No verified shelter with known coordinates nearby: no evacuation route computed.")
+        else:
+            logs.append(
+                f"[LogisticsAgent] Time-Varying Dijkstra Route to {evac_data['destination']['name']}: {evac_data['distance_km']} km "
+                f"(ETA {evac_data['eta_minutes']} min), bypassed {evac_data['submerged_segments_bypassed']} submerging road segment(s)."
+            )
+        if evac_data["reported_disruptions"]:
+            logs.append(
+                f"[LogisticsAgent] {len(evac_data['reported_disruptions'])} reported rail/road disruption(s) attached for "
+                "human review; the route was not changed by them."
+            )
 
         # ------------------------------------------------------------------
         # NODE 5: ReporterAgent (4-Format Report + Numeric Claim Validator)
@@ -397,6 +410,7 @@ class MultiAgentIncidentOrchestrator:
                     "area_sq_km": area_km2,
                     "max_depth_m": peak_depth_60m,
                     "language": language,
+                    "helplines": web_intel.get("verified_helplines", []),
                 },
             )
             draft_id = f"hitl_{uuid.uuid4().hex[:8]}"
