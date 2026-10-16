@@ -14,10 +14,10 @@ from fastapi import Header, HTTPException, Depends
 
 def _load_jwt_secret() -> str:
     secret = os.getenv("JWT_SECRET_KEY", "").strip()
-    if secret:
+    if secret and not secret.startswith("your_"):
         return secret
     print(
-        "[auth] JWT_SECRET_KEY is not set; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        "[auth] JWT_SECRET_KEY is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
         file=sys.stderr,
     )
     return secrets.token_urlsafe(48)

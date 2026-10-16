@@ -21,10 +21,10 @@ def _has_real_cognito_config() -> bool:
 
 def _load_fallback_secret() -> str:
     secret = os.getenv("AWS_COGNITO_FALLBACK_SECRET", "").strip()
-    if secret:
+    if secret and not secret.startswith("your_"):
         return secret
     print(
-        "[cognito] AWS_COGNITO_FALLBACK_SECRET is not set; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        "[cognito] AWS_COGNITO_FALLBACK_SECRET is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
         file=sys.stderr,
     )
     return secrets.token_urlsafe(48)

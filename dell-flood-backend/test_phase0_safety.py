@@ -157,6 +157,19 @@ def test_seeded_official_passes_the_gate():
     assert res.json()["status"] == "SUCCESS"
 
 
+def test_placeholder_jwt_secret_is_not_used():
+    from app.api import auth_deps
+
+    saved = os.environ.get("JWT_SECRET_KEY")
+    try:
+        os.environ["JWT_SECRET_KEY"] = "your_custom_jwt_secret_key_here"
+        assert auth_deps._load_jwt_secret() != "your_custom_jwt_secret_key_here"
+        os.environ["JWT_SECRET_KEY"] = "phase0-operator-chosen-secret"
+        assert auth_deps._load_jwt_secret() == "phase0-operator-chosen-secret"
+    finally:
+        os.environ["JWT_SECRET_KEY"] = saved or ""
+
+
 def test_forged_token_is_rejected():
     res = client.get("/api/hitl/queue", headers={"Authorization": "Bearer not.a.token"})
     assert res.status_code == 401
