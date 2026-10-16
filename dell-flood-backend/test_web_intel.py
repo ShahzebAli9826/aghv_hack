@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.api.auth_deps import require_official  # noqa: E402
 from app.intel.config import Mode, load_settings  # noqa: E402
 from app.intel.direct import DirectFetchError, safe_get  # noqa: E402
+from app.intel.monitors import MonitorKind  # noqa: E402
 from app.intel.evidence import (  # noqa: E402
     AccessMethod, Evidence, EvidenceCategory, FailureReason, Freshness, Grade, LocationQuery,
     Measurement, ProductId, RunState, Signal, SourceType, ValidationStatus, WebIntelRun,
@@ -773,6 +774,30 @@ def test_webhook_token_dedupe_and_refetch():
         "status": "ignored", "reason": "unknown monitor"}
     assert len(fake.calls(f"GET {AGENT}/v1/monitors/mon_1")) == 2
     service.runner.wait(changed["run_id"], 10)
+
+
+class MonitorSaveFails(IntelStore):
+    def save_monitor(self, record):
+        raise sqlite3.OperationalError("database is locked")
+
+
+def test_local_monitor_save_failure_deletes_remote_monitor():
+    fake = FakeHTTP({
+        f"POST {AGENT}/v1/monitors": httpx.Response(201, json={"monitor": {"id": "mon_1", "type": "fetch"}}),
+        f"DELETE {AGENT}/v1/monitors/mon_1": httpx.Response(200, json={"deleted": True}),
+        "POST https://api.fetch.tinyfish.ai/": lambda r: _fetch_response("https://ndma.gov.in/en/contact-us", "v1"),
+    })
+    store = MonitorSaveFails(os.path.join(tempfile.mkdtemp(), "flood_app.db"))
+    service = build_service(make_settings(), store=store, tinyfish_http=fake.client(), resolver=public_resolver,
+                            sleep=lambda s: None)
+    try:
+        service.monitors.create(MonitorKind.page, location=SIWAN, source_id="ndma_contact",
+                                products=(ProductId.helplines,), schedule_cron="0 */6 * * *")
+        raise AssertionError("expected the store failure to propagate")
+    except sqlite3.OperationalError as exc:
+        assert str(exc) == "database is locked"
+    assert [(r["method"], r["url"]) for r in fake.requests if "/v1/monitors" in r["url"]] == [
+        ("POST", f"{AGENT}/v1/monitors"), ("DELETE", f"{AGENT}/v1/monitors/mon_1")]
 
 
 def test_webhook_rejects_ids_that_are_not_plain_tokens():

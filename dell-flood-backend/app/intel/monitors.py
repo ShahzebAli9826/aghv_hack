@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -20,6 +21,8 @@ from app.intel.runner import IntelRunner, RunRequest
 from app.intel.sources import SOURCES, url_rejection
 from app.intel.store import IntelStore
 from app.intel.tinyfish_client import TinyFishClient, TinyFishError
+
+log = logging.getLogger("aegis.intel.monitors")
 
 _CRON = re.compile(r"^(\S+\s+){4}\S+$")
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -132,9 +135,20 @@ class MonitorService:
             "products": [p.value for p in products], "schedule_cron": schedule_cron.strip(),
             "created_at": datetime.now(timezone.utc).isoformat(), "webhook_configured": self._webhook_url() is not None,
         }
-        record["baseline_hash"] = self._observe(record)
-        self._store.save_monitor(record)
+        try:
+            record["baseline_hash"] = self._observe(record)
+            self._store.save_monitor(record)
+        except BaseException:
+            self._delete_remote_quietly(client, monitor.id)
+            raise
         return _public(record)
+
+    def _delete_remote_quietly(self, client: TinyFishClient, monitor_id: str) -> None:
+        """A remote monitor with no local record would keep running and calling the webhook unseen."""
+        try:
+            client.delete_monitor(monitor_id)
+        except TinyFishError as exc:
+            log.warning("could not delete orphaned TinyFish monitor: %s", type(exc).__name__)
 
     def list(self) -> list[dict]:
         return [_public(r) for r in self._store.list_monitors()]
