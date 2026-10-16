@@ -137,11 +137,12 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const [approvedDraftIds, setApprovedDraftIds] = useState<string[]>([]);
 
   const preset = PRESET_DISTRICTS.find((d) => d.name.toLowerCase() === locationName.trim().toLowerCase());
-  const webIntelTarget: CycleTarget = preset
+  // A typed place has no known coordinates until a cycle geocodes it, so the panel waits for one.
+  const webIntelTarget: CycleTarget | null = preset
     ? { location: preset.name, lat: preset.lat, lon: preset.lon, state: preset.state, district: preset.district }
     : cycleTarget && cycleTarget.location === locationName
     ? cycleTarget
-    : { location: locationName.trim() || 'Patna District', lat: activeLat, lon: activeLon };
+    : null;
 
   const loadGovernanceData = async () => {
     try {
@@ -622,24 +623,26 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         {/* ========================================================= */}
         {/* 2B. HUMAN-IN-THE-LOOP (HITL) EMERGENCY APPROVAL QUEUE      */}
         {/* ========================================================= */}
-        <WebIntelPanel
-          location={webIntelTarget.location}
-          lat={webIntelTarget.lat}
-          lon={webIntelTarget.lon}
-          state={webIntelTarget.state}
-          district={webIntelTarget.district}
-          aegisSummary={
-            summary
-              ? {
-                  severity: summary.severity,
-                  area_sq_km: summary.area_sq_km,
-                  gauge_status: summary.gauge_status,
-                  input_provenance: summary.input_provenance,
-                  depth_provenance: summary.depth_provenance,
-                }
-              : undefined
-          }
-        />
+        {webIntelTarget && (
+          <WebIntelPanel
+            location={webIntelTarget.location}
+            lat={webIntelTarget.lat}
+            lon={webIntelTarget.lon}
+            state={webIntelTarget.state}
+            district={webIntelTarget.district}
+            aegisSummary={
+              summary
+                ? {
+                    severity: summary.severity,
+                    area_sq_km: summary.area_sq_km,
+                    gauge_status: summary.gauge_status,
+                    input_provenance: summary.input_provenance,
+                    depth_provenance: summary.depth_provenance,
+                  }
+                : undefined
+            }
+          />
+        )}
 
         {hitlItems.filter((h) => h.status === 'PENDING' || h.status === 'DISPATCH_FAILED').length > 0 && (
           <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
