@@ -1,0 +1,20 @@
+{
+  "_comment": "MOCK replay fixture. The control room number matches fmiscwrdbihar.gov.in on 2026-10-16; the 1078 line is illustrative so two-source agreement can be shown.",
+  "fetch": {
+    "results": [
+      {
+        "url": "https://fmiscwrdbihar.gov.in/",
+        "final_url": "https://fmiscwrdbihar.gov.in/",
+        "title": "FMISC WRD Bihar",
+        "description": null,
+        "language": "en",
+        "format": "markdown",
+        "text": "Flood Forecast Monitoring Directorate, Central Flood Control Room.\nControl Room Phone No: 0612-2256999\nNational disaster helpline: 1078",
+        "author": null,
+        "published_date": null,
+        "latency_ms": 733
+      }
+    ],
+    "errors": []
+  }
+}

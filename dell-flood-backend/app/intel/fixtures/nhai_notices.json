@@ -1,0 +1,29 @@
+{
+  "_comment": "MOCK replay fixture. Search response then Fetch response (TinyFish OpenAPI shapes, 2026-10-16). Notice text is illustrative.",
+  "search": {
+    "query": "Siwan road closure flood advisory",
+    "results": [
+      {"position": 1, "site_name": "NHAI", "title": "Traffic advisory: NH-531 near Siwan (mock)", "snippet": "Diversion on NH-531 near Siwan due to waterlogging.", "url": "https://nhai.gov.in/mock/advisory-siwan", "date": "{{ts:-6h}}"},
+      {"position": 2, "site_name": "Example", "title": "Unofficial blog", "snippet": "Siwan roads", "url": "https://example.com/siwan", "date": "{{ts:-6h}}"}
+    ],
+    "total_results": 2,
+    "page": 0
+  },
+  "fetch": {
+    "results": [
+      {
+        "url": "https://nhai.gov.in/mock/advisory-siwan",
+        "final_url": "https://nhai.gov.in/mock/advisory-siwan",
+        "title": "Traffic advisory: NH-531 near Siwan (mock)",
+        "description": null,
+        "language": "en",
+        "format": "markdown",
+        "text": "Traffic on NH-531 near Siwan is diverted via the district road owing to waterlogging. Issued {{ts:-6h:dmy}}.",
+        "author": null,
+        "published_date": "{{ts:-6h}}",
+        "latency_ms": 640
+      }
+    ],
+    "errors": []
+  }
+}

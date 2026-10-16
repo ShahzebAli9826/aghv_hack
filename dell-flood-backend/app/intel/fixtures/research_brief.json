@@ -1,0 +1,21 @@
+{
+  "_comment": "MOCK replay fixture. GET /v1/research-run/{id} shape (TinyFish Research OpenAPI 2026-10-16). Report text is illustrative.",
+  "research": {
+    "research_run_id": "mock_research_0001",
+    "status": "COMPLETED",
+    "query": "(replay)",
+    "quick_result": {
+      "answer": "Siwan (Bihar): CWC reports the Ghaghra at Darauli above warning level and below danger level; no district-wide evacuation order was found in official sources (mock).",
+      "citations": ["https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=9000000000000001"]
+    },
+    "quick_result_summary": null,
+    "deep_result": {
+      "result": "Mock brief. Official CAP advisories cite Darauli at 60.14 m against a warning level of 59.82 m.",
+      "citations": ["https://ffs.india-water.gov.in/", "https://www.thehindu.com/mock/siwan-ghaghra"]
+    },
+    "run_ids": [],
+    "created_at": "{{ts:-40m}}",
+    "completed_at": "{{ts:-10m}}",
+    "error": null
+  }
+}

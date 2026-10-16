@@ -1,0 +1,5 @@
+{
+  "_comment": "MOCK replay fixture. All-India SACHET feed; repeats the Bihar item so dedupe is exercised.",
+  "feed": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><rss version=\"2.0\"><channel><title>All India: CAP Disaster Alert Feeds</title><item><title>River Ghaghra at Darauli in Siwan district of Bihar continues to flow in above normal flood situation at 4:00 am today.</title><description/><category>Met</category><link>https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=9000000000000001</link><author>controlroom@ndma.gov.in (CWC)</author><guid isPermaLink=\"false\">9000000000000001</guid><pubDate>{{ts:-4h:rfc}}</pubDate></item><item><title>Thunderstorm with lightning likely over Hazaribagh in next 3 hours.</title><description/><category>Met</category><link>https://sachet.ndma.gov.in/cap_public_website/FetchXMLFile?identifier=9000000000000003</link><author>controlroom@ndma.gov.in (IMD Ranchi)</author><guid isPermaLink=\"false\">9000000000000003</guid><pubDate>{{ts:-2h:rfc}}</pubDate></item></channel></rss>",
+  "linked": {}
+}
