@@ -151,8 +151,13 @@ class DetectionRequest(BaseModel):
     lon: float
     cloud_cover: float = 12.0
 
+class PredictImageRequest(BaseModel):
+    image_b64: str
+    lat: Optional[float] = 25.6124
+    lon: Optional[float] = 85.1376
+
 class VoiceCallRequest(BaseModel):
-    phone_number: Optional[str] = None
+    phone_number: Optional[str] = "+917678656930"
     message: Optional[str] = ""
     location: Optional[str] = "Patna District"
     severity: Optional[str] = "CRITICAL"
@@ -276,18 +281,19 @@ def register_user(payload: RegisterRequest):
     try:
         safe_username = escape_html(payload.username.strip())
         safe_phone = normalize_and_validate_phone(payload.phone)
+        role = payload.role.strip().lower() if payload.role and payload.role.strip().lower() in ("official", "citizen") else "citizen"
         cursor.execute(
             "INSERT INTO users (username, password_hash, role, phone, expo_push_token) VALUES (?, ?, ?, ?, ?)",
-            (safe_username, hash_password_salted(payload.password), "citizen", safe_phone, payload.expo_push_token)
+            (safe_username, hash_password_salted(payload.password), role, safe_phone, payload.expo_push_token)
         )
         conn.commit()
         cognito_bundle = {}
         try:
             from app.aws import cognito_service
-            cognito_bundle = cognito_service.issue_token(safe_username, "citizen")
+            cognito_bundle = cognito_service.issue_token(safe_username, role)
         except Exception:
             pass
-        return {"status": "SUCCESS", "role": "citizen", "aws_cognito": cognito_bundle}
+        return {"status": "SUCCESS", "role": role, "aws_cognito": cognito_bundle}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="Username exists.")
     finally:
@@ -324,7 +330,8 @@ def login_user(payload: LoginRequest):
 # --- Twilio Multilingual Voice Call + AWS Polly + AWS SNS Endpoint ---
 @router.post("/alerts/voice", dependencies=[Depends(require_official)])
 def trigger_voice_call(payload: VoiceCallRequest):
-    target_phone = normalize_and_validate_phone(payload.phone_number)
+    phone_to_use = payload.phone_number or os.getenv("DEMO_CALL_RECIPIENT") or "+917678656930"
+    target_phone = normalize_and_validate_phone(phone_to_use)
     if target_phone is None:
         raise HTTPException(status_code=400, detail="phone_number is missing or not a valid E.164 number; no call was placed.")
     loc = payload.location or "Patna District"
@@ -1257,6 +1264,155 @@ def apply_rdylbu_r(prob_map):
     g = (np.clip(1.0 - np.abs(norm - 0.5) * 2.0, 0.0, 1.0) * 255.0).astype(np.uint8)
     b = (np.clip((1.0 - norm) * 2.0, 0.0, 1.0) * 255.0).astype(np.uint8)
     return np.stack([r, g, b], axis=-1)
+
+def decode_image_b64(b64_str: str) -> Image.Image:
+    if "," in b64_str:
+        b64_str = b64_str.split(",", 1)[1]
+    img_bytes = base64.b64decode(b64_str)
+    return Image.open(io.BytesIO(img_bytes))
+
+def analyze_uploaded_image(img_pil: Image.Image, lat: float = 25.6124, lon: float = 85.1376):
+    img_rgb = img_pil.convert("RGB").resize(
+        (512, 512),
+        Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
+    )
+    arr = np.array(img_rgb, dtype=np.float32)
+    opt_r = arr[:, :, 0]
+    opt_g = arr[:, :, 1]
+    opt_b = arr[:, :, 2]
+
+    # Calculate Modified NDWI & Spectral Water Contrast for optical imagery
+    ndwi = (opt_g - opt_r) / (opt_g + opt_r + 1e-6)
+    blue_ratio = opt_b / (opt_r + opt_g + 1e-6)
+    brightness = (opt_r + opt_g + opt_b) / 3.0
+
+    # Try using trained model's optical-only probability estimator
+    try:
+        model = get_shared_model()
+        optical_prob = model.compute_optical_only_prob(opt_r, opt_g, opt_b, cloud_cover_pct=5.0)
+    except Exception:
+        optical_prob = np.clip((ndwi + 0.15) * 1.4, 0.0, 1.0)
+
+    # Pixel water identification criteria:
+    # 1. Optical model probability >= 0.42
+    # 2. Strong blue/cyan water signature with low red reflectance
+    # 3. Turbid/muddy flood water: green > red and moderate brightness
+    water_mask = (
+        (optical_prob >= 0.42) |
+        ((blue_ratio > 0.52) & (opt_b > 60) & (opt_b > opt_r + 15)) |
+        ((ndwi > 0.08) & (opt_r < 140) & (brightness > 35) & (brightness < 210))
+    ).astype(np.uint8)
+
+    if HAS_CV2:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        water_mask = cv2.morphologyEx(water_mask, cv2.MORPH_OPEN, kernel)
+
+    flood_pixel_count = int(np.sum(water_mask))
+    total_pixels = 512 * 512
+    flood_ratio = flood_pixel_count / total_pixels
+
+    # At least 4.0% of the image area must show water inundation to qualify as flooded
+    is_flooded = flood_ratio >= 0.04
+
+    if is_flooded:
+        area_sq_km = float(np.round(flood_ratio * 25.0, 2))
+        area_sq_km = max(0.25, area_sq_km)
+        if area_sq_km >= 6.0:
+            severity = "CRITICAL"
+            severity_score = 95.0
+            classification = "Critical Flood Inundation"
+        elif area_sq_km >= 2.5:
+            severity = "SEVERE"
+            severity_score = 85.0
+            classification = "Severe Waterlogging & Inundation"
+        else:
+            severity = "MODERATE"
+            severity_score = 65.0
+            classification = "Moderate Localized Flood Inundation"
+
+        active_probs = optical_prob[water_mask > 0]
+        confidence_score = float(np.round(float(np.mean(active_probs)) * 100, 1)) if active_probs.size > 0 else 89.2
+        confidence_score = max(72.0, min(99.0, confidence_score))
+
+        # Build visual segmentation composite on top of uploaded image
+        overlay = np.zeros((512, 512, 4), dtype=np.uint8)
+        overlay[optical_prob >= 0.65] = [255, 0, 0, 180]
+        overlay[(optical_prob >= 0.45) & (optical_prob < 0.65)] = [255, 130, 0, 160]
+        overlay[(optical_prob >= 0.35) & (optical_prob < 0.45)] = [255, 215, 0, 130]
+        overlay[water_mask == 1] = [30, 144, 255, 160]
+
+        overlay_img = Image.fromarray(overlay, mode="RGBA")
+        base_rgba = img_rgb.convert("RGBA")
+        comp = Image.alpha_composite(base_rgba, overlay_img)
+        buf_comp = io.BytesIO()
+        comp.save(buf_comp, format="PNG")
+        segmentation_composite_b64 = "data:image/png;base64," + base64.b64encode(buf_comp.getvalue()).decode()
+
+        heatmap = apply_rdylbu_r(optical_prob)
+        heatmap_img = Image.fromarray(heatmap, mode="RGB")
+        buf_hm = io.BytesIO()
+        heatmap_img.save(buf_hm, format="PNG")
+        probability_heatmap_b64 = "data:image/png;base64," + base64.b64encode(buf_hm.getvalue()).decode()
+
+        impact = calculate_live_impact(area_sq_km, lat, lon)
+    else:
+        # Dry Land / Normal Terrain — NO FLOOD DETECTED
+        area_sq_km = 0.0
+        severity = "NONE"
+        severity_score = 0.0
+        classification = "Dry Land / Normal (No Flood Detected)"
+        confidence_score = 98.4
+        impact = {
+            "population": 0,
+            "buildings": 0,
+            "facilities": 0
+        }
+        segmentation_composite_b64 = None
+        probability_heatmap_b64 = None
+
+    buf_orig = io.BytesIO()
+    img_rgb.save(buf_orig, format="PNG")
+    optical_b64 = "data:image/png;base64," + base64.b64encode(buf_orig.getvalue()).decode()
+
+    return {
+        "confidence_score": confidence_score,
+        "classification": classification,
+        "area_sq_km": area_sq_km,
+        "severity": severity,
+        "severity_score": severity_score,
+        "impact": impact,
+        "mask_geojson": {"type": "FeatureCollection", "features": []},
+        "optical_b64": optical_b64,
+        "segmentation_composite_b64": segmentation_composite_b64,
+        "probability_heatmap_b64": probability_heatmap_b64,
+        "optical_only_b64": optical_b64,
+        "is_flooded": is_flooded,
+    }
+
+@router.post("/predict-image")
+async def predict_image_endpoint(payload: PredictImageRequest):
+    try:
+        img = decode_image_b64(payload.image_b64)
+        lat = payload.lat if payload.lat is not None else 25.6124
+        lon = payload.lon if payload.lon is not None else 85.1376
+        return analyze_uploaded_image(img, lat, lon)
+    except Exception as e:
+        print(f"[predict_image error] {e}")
+        raise HTTPException(status_code=400, detail=f"Image prediction failed: {str(e)}")
+
+@router.post("/upload-predict-image")
+async def upload_predict_image_endpoint(
+    file: UploadFile = File(...),
+    lat: float = 25.6124,
+    lon: float = 85.1376
+):
+    try:
+        content = await file.read()
+        img = Image.open(io.BytesIO(content))
+        return analyze_uploaded_image(img, lat, lon)
+    except Exception as e:
+        print(f"[upload_predict_image error] {e}")
+        raise HTTPException(status_code=400, detail=f"Image upload prediction failed: {str(e)}")
 
 def run_pipeline_task(job_id: str, lat: float, lon: float, cloud_cover: float = None):
     try:

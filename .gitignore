@@ -111,3 +111,8 @@ Thumbs.db
 
 *.log
 **/*.log
+
+dell-flood-backend/dynamodb_local_cache.json
+dell-flood-backend/last_run_summary.json
+*_local_cache.json
+

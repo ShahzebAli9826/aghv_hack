@@ -994,23 +994,6 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
         </TouchableOpacity>
       </View>
 
-      {/* Safe Evacuation Guidance to Safe Place (Shown ONLY when flood is predicted!) */}
-      {isFlooded && (
-        <View style={styles.quickActionBar}>
-          <TouchableOpacity
-            style={styles.actionPillSafePlace}
-            onPress={handleOpenGoogleMapsEvacuation}
-            activeOpacity={0.85}
-          >
-            <Navigation size={14} color="#ffffff" style={{ marginRight: 6 }} />
-            <Text style={styles.actionPillSafePlaceText}>
-              {language === 'hi'
-                ? `🗺️ सुरक्षित स्थान का मार्ग देखें (Google Maps)`
-                : `🗺️ Google Maps Guidance to Safe Place`}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
 
       <View style={styles.mapViewportContainer}>
           <View style={styles.scrollHelpBanner}>
@@ -1498,7 +1481,7 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
               <FileText size={18} color="#6366f1" />
             </View>
             <Text style={styles.twiHeaderTitle}>
-              24h Forward TWI Runoff & Safe Evacuation Plan
+              24h Forward Topographic Wetness Index (TWI) Runoff Model
             </Text>
             <View style={styles.twiRiskBadge}>
               <Text style={styles.twiRiskBadgeText}>
@@ -1508,7 +1491,7 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
             </View>
           </View>
 
-          {/* Two Dark Spec Cards */}
+          {/* Dark Spec Card */}
           <View style={styles.twiCardsRow}>
             {/* Topographic Wetness Index */}
             <View style={styles.twiDarkCard}>
@@ -1527,31 +1510,6 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
                   : '⚠️ 2 critical runoff sinkholes'}
               </Text>
             </View>
-
-            {/* Safe High-Ground Evacuation (Shown ONLY when flood is predicted!) */}
-            {isFlooded && (
-              <View style={styles.twiDarkCard}>
-                <View style={styles.twiDarkCardHeader}>
-                  <Shield size={13} color="#34d399" style={{ marginRight: 5 }} />
-                  <Text style={styles.twiDarkCardSubtitle}>Emergency Shelter Evacuation</Text>
-                </View>
-                <Text style={styles.twiDarkCardShelter} numberOfLines={1}>
-                  {evacResult?.chosen_shelter?.name || 'Elevated High-Ground Relief Center'}
-                </Text>
-                <Text style={styles.twiDarkCardDistance}>
-                  {evacResult
-                    ? `🏃 ${evacResult.distance_km?.toFixed(1)} km away (+${evacResult.elevation_gain_m || 16.3}m ASL gain)`
-                    : '↗ 2.4 km away (+16.3m ASL gain)'}
-                </Text>
-                <TouchableOpacity
-                  style={{ marginTop: 6, backgroundColor: '#059669', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-                  onPress={handleOpenGoogleMapsEvacuation}
-                >
-                  <ExternalLink size={11} color="#ffffff" style={{ marginRight: 4 }} />
-                  <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '700' }}>Google Maps Shelter Route</Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
 
           {/* Google Maps Directions Guidance Card (Shown ONLY when flood is predicted!) */}

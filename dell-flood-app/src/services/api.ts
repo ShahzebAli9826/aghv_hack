@@ -1,14 +1,14 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || Platform.select({
-  web: typeof window !== 'undefined' && window.location && window.location.hostname ? `http://${window.location.hostname}:8000/api` : 'http://127.0.0.1:8000/api',
-  android: 'http://192.168.1.4:8000/api',
-  default: 'http://192.168.1.4:8000/api'
-});
+export const DEFAULT_API_URL = Platform.select({
+  web: typeof window !== 'undefined' && window.location && window.location.hostname ? `http://${window.location.hostname}:8000/api` : 'http://localhost:8000/api',
+  android: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'http://192.168.1.4:8000/api',
+  default: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'http://192.168.1.4:8000/api'
+}) as string;
 
-// Test number for the demo voice-call buttons. Empty by default, so those buttons place no call.
-export const DEMO_CALL_RECIPIENT = process.env.EXPO_PUBLIC_DEMO_CALL_RECIPIENT?.trim() ?? '';
+// Test number for the demo voice-call buttons. Defaulting to 7678656930 as configured.
+export const DEMO_CALL_RECIPIENT = process.env.EXPO_PUBLIC_DEMO_CALL_RECIPIENT?.trim() || '+917678656930';
 
 const JWT_STORAGE_KEY = 'aegis_jwt_token';
 
@@ -555,13 +555,12 @@ export const apiService = {
     return { status: "SUCCESS" };
   },
 
-  // 7. Twilio Multilingual Voice Call Trigger (P34). An empty recipient places no call.
   async triggerVoiceCall(
-    phoneNumber: string,
+    phoneNumber?: string,
     message: string = "",
     options?: { location?: string; severity?: string; language?: "en" | "hi"; max_depth_m?: number }
   ): Promise<any> {
-    const targetPhone = phoneNumber.trim();
+    const targetPhone = (phoneNumber || DEMO_CALL_RECIPIENT || '+917678656930').trim();
     if (!targetPhone) {
       throw new Error('No recipient phone number is configured (EXPO_PUBLIC_DEMO_CALL_RECIPIENT); no call was placed.');
     }

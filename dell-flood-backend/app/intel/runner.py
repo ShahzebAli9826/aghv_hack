@@ -65,6 +65,7 @@ from app.intel.store import IntelStore
 from app.intel.tinyfish_client import (
     AgentRun,
     CostLedger,
+    FetchedPage,
     FetchResult,
     ResearchRun,
     SearchHit,
@@ -335,11 +336,22 @@ def _exec_agent(task: SourceTask, ctx: ExecCtx) -> Raw:
 
 
 def _exec_fetch(task: SourceTask, ctx: ExecCtx) -> Raw:
-    result = ctx.gateway.fetch(task.source, [task.source.start_url])
-    if not result.pages:
-        detail = "; ".join(f"{err} ({status})" for _, err, status in result.errors)[:200] or "no content"
-        raise DirectFetchError(f"fetch failed: {detail}")
-    return PagesRaw(result.pages)
+    pages = ()
+    try:
+        result = ctx.gateway.fetch(task.source, [task.source.start_url])
+        pages = result.pages
+    except Exception as exc:
+        log.warning("TinyFish gateway fetch failed for %s (%s); trying direct fallback", task.source.id, exc)
+    if not pages:
+        try:
+            url = task.source.start_url
+            final_url, text = ctx.gateway.get_text(task.source, url)
+            pages = (FetchedPage(url=url, final_url=final_url, title=task.source.name, text=text,
+                                 published_date=None, language="en"),)
+        except Exception as fallback_exc:
+            detail = f"fetch failed: TinyFish proxy error, direct fallback error: {fallback_exc}"
+            raise DirectFetchError(detail)
+    return PagesRaw(pages)
 
 
 def _exec_search(task: SourceTask, ctx: ExecCtx) -> Raw:
@@ -351,7 +363,21 @@ def _exec_search(task: SourceTask, ctx: ExecCtx) -> Raw:
     urls = [h.url for h in allowed[: task.product.fetch_search_hits]]
     if not urls:
         return PagesRaw(())
-    return PagesRaw(ctx.gateway.fetch(task.source, urls).pages)
+    try:
+        pages = ctx.gateway.fetch(task.source, urls).pages
+    except Exception:
+        pages = ()
+    if not pages:
+        fetched = []
+        for u in urls:
+            try:
+                final_url, text = ctx.gateway.get_text(task.source, u)
+                fetched.append(FetchedPage(url=u, final_url=final_url, title=None, text=text,
+                                           published_date=None, language="en"))
+            except Exception:
+                continue
+        pages = tuple(fetched)
+    return PagesRaw(pages)
 
 
 def _exec_research(task: SourceTask, ctx: ExecCtx) -> Raw:

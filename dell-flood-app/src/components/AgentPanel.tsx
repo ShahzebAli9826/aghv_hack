@@ -210,7 +210,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const response = await apiService.runAgentCycle(locationName, targetLat, targetLon, {
         report_format: reportFormat,
         language: lang,
-        phones: DEMO_CALL_RECIPIENT ? [DEMO_CALL_RECIPIENT] : [],
+        phones: [DEMO_CALL_RECIPIENT || '+917678656930'],
       });
 
       setCycleTarget({
@@ -321,7 +321,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const { severity: sev, location: loc, area_sq_km: area, peak_depth_m: depth } = summary;
       const extent = typeof area === 'number' && area > 0 ? ` over ${area.toFixed(2)} sq km` : '';
       const res = await apiService.triggerVoiceCall(
-        DEMO_CALL_RECIPIENT,
+        DEMO_CALL_RECIPIENT || '+917678656930',
         `Emergency Alert for ${loc}: ${sev} flood risk${extent}.`,
         {
           location: loc,
@@ -507,41 +507,6 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             </View>
           )}
 
-          {/* AWS Free Tier & AWS MCP Diagnostic Runner */}
-          <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#0f172a' }}>
-                  ☁️ AWS Free Tier & AWS MCP Toolkit (12 Cloud Services / 15 MCP Tools)
-                </Text>
-                <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                  S3 • DynamoDB • SNS • Polly • Cognito • CloudWatch • Bedrock • Location • Translate • Comprehend • Rekognition • StepFunctions • SQS/SSM
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.mcpPillBtn, { backgroundColor: '#0f172a', borderColor: '#0f172a', paddingHorizontal: 12, paddingVertical: 7 }]}
-                onPress={handleRunAwsMcpSuite}
-                disabled={awsSuiteRunning}
-              >
-                <Text style={[styles.mcpPillText, { color: '#ffffff' }]}>
-                  {awsSuiteRunning ? 'Testing via AWS MCP...' : '⚡ Verify All via AWS MCP'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {awsSuiteResult && Array.isArray(awsSuiteResult.results) && (
-              <View style={[styles.mcpBox, { marginTop: 10, backgroundColor: '#f8fafc', borderColor: '#cbd5e1' }]}>
-                <Text style={[styles.mcpBoxHeader, { color: '#059669' }]}>
-                  ✅ AWS Free Tier MCP Verification Suite: {awsSuiteResult.passed_count}/{awsSuiteResult.total_services_tested} Passed ({awsSuiteResult.total_suite_latency_ms}ms)
-                </Text>
-                {awsSuiteResult.results.map((r: any, idx: number) => (
-                  <Text key={idx} style={[styles.mcpBoxLine, { color: '#334155' }]} numberOfLines={1}>
-                    ✓ {r.service} → {r.mcp_tool} [{r.status}] ({r.latency_ms}ms | sha256:{r.sha256_hash?.slice(0, 8)})
-                  </Text>
-                ))}
-              </View>
-            )}
-          </View>
         </View>
 
         {/* ========================================================= */}

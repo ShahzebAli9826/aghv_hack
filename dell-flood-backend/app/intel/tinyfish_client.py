@@ -296,6 +296,15 @@ class CostLedger:
         return round(self._spent_steps * self.usd_per_step, 4)
 
 
+def _strip_unsupported_schema_keys(obj: Any) -> Any:
+    """TinyFish automation API rejects 'description' inside output_schema."""
+    if isinstance(obj, dict):
+        return {k: _strip_unsupported_schema_keys(v) for k, v in obj.items() if k != "description"}
+    if isinstance(obj, list):
+        return [_strip_unsupported_schema_keys(v) for v in obj]
+    return obj
+
+
 # --- client ---
 
 class TinyFishClient:
@@ -344,7 +353,7 @@ class TinyFishClient:
                     max_steps: int | None) -> dict:
         body: dict[str, Any] = {"url": url, "goal": goal}
         if output_schema:
-            body["output_schema"] = output_schema
+            body["output_schema"] = _strip_unsupported_schema_keys(output_schema)
         if webhook_url:
             body["webhook_url"] = webhook_url
         if max_steps:
@@ -511,13 +520,20 @@ class TinyFishClient:
     def run_research(self, query: str, *, domains: tuple[str, ...], recency_minutes: int | None = None,
                      cancel_event: threading.Event | None = None) -> ResearchRun:
         research_id = self.start_research(query, domains=domains, recency_minutes=recency_minutes)
-        deadline = self._clock() + self._settings.run_timeout_s
+        timeout_s = max(240.0, float(self._settings.run_timeout_s))
+        deadline = self._clock() + timeout_s
         while True:
             run = self.get_research(research_id)
             if run.terminal:
                 return run
             if (cancel_event is not None and cancel_event.is_set()) or self._clock() >= deadline:
-                self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_id)}/cancel")
+                try:
+                    self._request("POST", f"{self._settings.agent_base_url}/v1/research-run/{_seg(research_id)}/cancel")
+                except Exception:
+                    pass
+                final_check = self.get_research(research_id)
+                if final_check.answer or final_check.report:
+                    return final_check
                 if cancel_event is not None and cancel_event.is_set():
                     raise TinyFishCancelled("cancelled", run_id=research_id)
                 raise TinyFishTimeout("research run timed out", run_id=research_id)

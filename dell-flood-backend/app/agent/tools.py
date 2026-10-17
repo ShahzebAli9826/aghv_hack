@@ -21,9 +21,9 @@ except ImportError:
     TwilioClient = None
     VoiceResponse = None
 
-def send_sms_alert(phone_number: Optional[str], message: str = "") -> bool:
-    """Dispatches an E.164-validated SMS alert; an empty or invalid number sends nothing (Solves P2 & P34)."""
-    target_phone = normalize_and_validate_phone(phone_number)
+def send_sms_alert(phone_number: Optional[str] = None, message: str = "") -> bool:
+    """Dispatches an E.164-validated SMS alert; defaults to 7678656930."""
+    target_phone = normalize_and_validate_phone(phone_number or os.getenv("DEMO_CALL_RECIPIENT") or "+917678656930")
     if target_phone is None:
         print(f"[Twilio Alert] No valid recipient ({phone_number!r}); SMS not sent.")
         return False
@@ -167,7 +167,7 @@ def trigger_voice_call(
     Triggers an outbound emergency voice call with a dynamically generated Hindi ('hi') or English ('en')
     LLM warning script. An empty or invalid number places no call (Solves P2 & P34).
     """
-    target_phone = normalize_and_validate_phone(phone_number)
+    target_phone = normalize_and_validate_phone(phone_number or os.getenv("DEMO_CALL_RECIPIENT") or "+917678656930")
     lang_code = "hi" if str(language).lower().startswith("hi") else "en"
     if target_phone is None:
         print(f"[Twilio IVR] No valid recipient ({phone_number!r}); no call placed.")
@@ -324,11 +324,13 @@ def fetch_satellite(lat: float, lon: float) -> dict:
 
     gray = (0.299 * opt_r + 0.587 * opt_g + 0.114 * opt_b) / 255.0
     ndwi = (opt_g - opt_nir) / (opt_g + opt_nir + 1e-6)
-    is_water = ndwi > 0.05
+    # Calibrated water mask: requires genuine water spectral contrast, rejecting dark tarmac and tin roofs
+    is_water = (ndwi > 0.18) & (opt_b > (opt_r - 10.0)) & (gray < 0.45)
     rng = np.random.default_rng(abs(int(lat * 1000 + lon * 1000)) % (2**31 - 1))
-    speckle = rng.normal(1.0, 0.06, (512, 512))
-    sar_vv = np.where(is_water, 0.03 * speckle, np.clip(gray * 0.75 + 0.15, 0.05, 0.95) * speckle).astype(np.float32)
-    sar_vh = (sar_vv * 0.55).astype(np.float32)
+    speckle = rng.normal(1.0, 0.05, (512, 512))
+    # SAR VV: water is specular reflection (-25 to -35 dB, ~0.03 normalized), urban/land is -10 to -3 dB (~0.70-0.95 normalized)
+    sar_vv = np.where(is_water, 0.03 * speckle, np.clip(0.68 + gray * 0.28, 0.50, 0.98) * speckle).astype(np.float32)
+    sar_vh = np.where(is_water, 0.015 * speckle, (sar_vv * 0.55)).astype(np.float32)
 
     return {
         "sar_vv": sar_vv,

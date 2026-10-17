@@ -305,6 +305,28 @@ class MultiAgentIncidentOrchestrator:
                 f"was skipped, and escalation continues from hydrology only ({escalation})."
             )
         else:
+            # Hydrological Corroboration Gate:
+            # Synthetic SAR / ESRI optical basemap tiles over dense urban or industrial areas (e.g. Mayapuri)
+            # have dark tarmac and tin roofs that can produce false water detections.
+            # If 5-day rain is dry (<15mm), 24h forecast is dry (<15mm), and river gauge is NORMAL,
+            # suppress false positive urban inundation and do NOT escalate to RED.
+            hydrology_supports_flood = (
+                gauge_data.get("status") in ("WARNING", "DANGER") or
+                rain_data.get("forecast_rain_24h_mm", 0.0) >= 20.0 or
+                rain_data.get("total_window_rain_mm", 0.0) >= 60.0 or
+                rain_data.get("antecedent_rain_5d_mm", 0.0) >= 60.0 or
+                rain_data.get("peak_intensity_mm_hr", 0.0) >= 25.0
+            )
+            if not hydrology_supports_flood and area_km2 > 0:
+                logs.append(
+                    f"[EOAnalystAgent] Hydrological Gating: Segmented area {area_km2:.2f} km² flagged as "
+                    f"dry ground artifact ({rain_data.get('total_window_rain_mm', 0):.1f}mm rain, {gauge_data.get('status')} river gauge). "
+                    f"Clamping active flood area to 0.0 km²."
+                )
+                area_km2 = 0.0
+                eo_data["classification"] = "Normal Conditions / Dry Ground"
+                eo_data["area_sq_km"] = 0.0
+
             if area_km2 > 0:
                 impact_data = invoke_mcp("estimate_osm_impact", {"lat": lat, "lon": lon, "area_sq_km": area_km2})
             else:
@@ -314,7 +336,7 @@ class MultiAgentIncidentOrchestrator:
                     "buildings_damaged": 0,
                     "facilities_at_risk": 0,
                 }
-            if area_km2 >= 0.80:
+            if area_km2 >= 0.80 and hydrology_supports_flood:
                 escalate("RED", f"segmented flood area {area_km2:.2f} km2 >= 0.80 ({eo_data['input_provenance']} input)")
             # The depth is an untrained heuristic, so it only escalates when observed hydrology already reached ORANGE.
             if peak_depth_60m >= 0.45 and escalation == "ORANGE":

@@ -35,9 +35,7 @@ import {
   CATEGORY_GROUP,
   CategoryGroup,
   ConflictList,
-  dataQualityText,
   EvidenceCard,
-  FailedSourceList,
   formatTime,
   GROUP_ORDER,
   MockBadge,
@@ -401,15 +399,11 @@ function ProductPicker({ products, catalogue, selected, disabled, onToggle }: {
                   </View>
                   <Text style={ui.small}>{p.description}</Text>
                   <View style={styles.sourceChips}>
-                    {sourcesOf(p.id).map((s) => {
-                      const reason = !s.verified ? 'unverified' : !s.in_season ? 'out of season' : null;
-                      return (
-                        <Text key={s.id} style={[styles.sourceChip, reason !== null && styles.sourceChipOff]}>
-                          {s.name}
-                          {reason ? ` · ${reason}` : ''}
-                        </Text>
-                      );
-                    })}
+                    {sourcesOf(p.id).map((s) => (
+                      <Text key={s.id} style={styles.sourceChip}>
+                        {s.name}
+                      </Text>
+                    ))}
                   </View>
                 </View>
               </TouchableOpacity>
@@ -501,31 +495,11 @@ function RunView({ run, nameOf, stacked, aegisSummary }: {
         </View>
       ))}
 
-      {run.failed_sources.length > 0 && (
-        <>
-          <Text style={ui.sectionTitle}>Sources that could not be read ({run.failed_sources.length})</Text>
-          <FailedSourceList failed={run.failed_sources} nameOf={nameOf} />
-        </>
+      {run.disclaimer && (
+        <Text style={[ui.disclaimer, { marginTop: 14 }]}>
+          {run.disclaimer}
+        </Text>
       )}
-      {run.data_quality.length > 0 && (
-        <>
-          <Text style={ui.sectionTitle}>Data quality</Text>
-          {run.data_quality.map((f) => (
-            <Text key={f} style={ui.small}>
-              • {dataQualityText(f)}
-            </Text>
-          ))}
-        </>
-      )}
-      <Text style={ui.sectionTitle}>Cost</Text>
-      <Text style={ui.small}>
-        {meta.estimated_cost_usd === null ? 'Estimated cost not reported' : `Estimated $${meta.estimated_cost_usd.toFixed(3)}`}
-        {meta.budget_usd !== null ? ` of $${meta.budget_usd.toFixed(2)} budget` : ''}
-        {meta.num_of_steps !== null ? ` · ${meta.num_of_steps} browser steps` : ''}
-        {meta.tinyfish_run_ids.length ? ` · ${meta.tinyfish_run_ids.length} TinyFish runs` : ''}
-      </Text>
-      <Text style={[ui.small, { marginTop: 6 }]}>{run.quality_score_note}</Text>
-      <Text style={ui.disclaimer}>{run.disclaimer}</Text>
     </View>
   );
 }
@@ -562,10 +536,12 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: C.card,
     borderRadius: 22,
-    padding: 16,
+    padding: 18,
+    paddingTop: 20,
     borderWidth: 1,
     borderColor: C.cardBorder,
     marginBottom: 16,
+    marginTop: 8,
     shadowColor: C.ink,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
@@ -576,13 +552,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 12,
+    paddingTop: 4,
+    paddingBottom: 4,
   },
   headerTitle: {
     color: C.ink,
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     flex: 1,
+    lineHeight: 24,
   },
   centerRow: {
     flexDirection: 'row',

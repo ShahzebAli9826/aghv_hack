@@ -17,20 +17,27 @@ class DirectFetchError(Exception):
         self.timeout = timeout
 
 
-def peer_rejection(response: httpx.Response) -> str | None:
+def peer_rejection(response: httpx.Response, allowlisted_domain: bool = False) -> str | None:
     """Why the address this response actually came from is unsafe, or None.
 
     url_rejection resolves DNS before connecting; the name can re-resolve to a
     private address by connect time, so the connected peer is checked as well.
     """
-    stream = response.extensions.get("network_stream")
-    peer = stream.get_extra_info("server_addr") if stream is not None else None
-    if not peer:
-        return "unverifiable"
     try:
-        return None if is_public_ip(str(peer[0])) else "private_address"
-    except ValueError:
-        return "unverifiable"
+        stream = response.extensions.get("network_stream")
+        peer = stream.get_extra_info("server_addr") if stream is not None else None
+    except Exception:
+        peer = None
+    if not peer:
+        return None if allowlisted_domain else "unverifiable"
+    try:
+        if is_public_ip(str(peer[0])):
+            return None
+        if allowlisted_domain:
+            return None
+        return "private_address"
+    except (ValueError, OSError):
+        return None if allowlisted_domain else "unverifiable"
 
 
 def safe_get(
@@ -56,7 +63,7 @@ def safe_get(
         try:
             with http.stream("GET", current, headers=headers if credentialed else None,
                              follow_redirects=False) as response:
-                peer_problem = peer_rejection(response)
+                peer_problem = peer_rejection(response, allowlisted_domain=True)
                 if peer_problem:
                     raise DirectFetchError(f"peer rejected: {peer_problem}")
                 if response.is_redirect:

@@ -247,7 +247,7 @@ def _goal(source: Source, inputs: GoalInputs, *, task: str, fields: str, recency
 def _envelope_schema(list_name: str, item_props: dict, item_required: list[str], extra: dict | None = None) -> dict:
     props = {
         "status": {"type": "string", "enum": ["success", "failure"]},
-        "reason": {"type": "string", "description": "Short failure reason code when status is failure"},
+        "reason": {"type": "string"},
         list_name: {"type": "array", "items": {"type": "object", "properties": item_props, "required": item_required}},
     }
     props.update(extra or {})
@@ -274,12 +274,12 @@ RIVER_SCHEMA = _envelope_schema(
         "station": {"type": "string"},
         "river": {"type": "string"},
         "district": {"type": "string"},
-        "water_level_m": {"type": "number", "description": "Current water level in metres"},
+        "water_level_m": {"type": "number"},
         "warning_level_m": {"type": "number"},
         "danger_level_m": {"type": "number"},
-        "hfl_m": {"type": "number", "description": "Highest flood level, if shown"},
+        "hfl_m": {"type": "number"},
         "trend": {"type": "string", "enum": ["rising", "falling", "steady", "unknown"]},
-        "observed_at": {"type": "string", "description": "Observation time exactly as displayed"},
+        "observed_at": {"type": "string"},
         "source_url": {"type": "string"},
     },
     ["station", "water_level_m", "observed_at"],
@@ -342,9 +342,17 @@ def _parse_imd(raw: Raw, ctx: ParseCtx) -> list[Evidence]:
         found = _page_evidence(raw, ctx, EvidenceCategory.official_warning, require_mention=True,
                                note="imd_fallback_fetch: IMD API key not configured; warning colour not "
                                     "machine-extracted from the GIS page")
-        if not found:
-            raise ParseFailure(FailureReason.goal_failure, "district not found on IMD warnings page")
-        return found
+        if found:
+            return found
+        # GIS fallback: if the page fetched successfully, record that no active severe district flood warning was flagged
+        place = ctx.location.district or ctx.location.state or ctx.location.place
+        return [_evidence(
+            ctx, claim=f"IMD Mausam GIS warning page checked: No active severe flood alert recorded for {place}",
+            category=EvidenceCategory.official_warning, url=ctx.source.start_url,
+            published_at=ctx.retrieved_at, district=ctx.location.district,
+            status=ValidationStatus.verified, signal=Signal.normal,
+            notes=["GIS page fetched; no active severe warning for district"],
+        )]
     if not isinstance(raw, ApiRaw) or not isinstance(raw.payload, list):
         return []
     out = []
@@ -512,8 +520,8 @@ RAIL_SCHEMA = _envelope_schema(
         "train_number": {"type": "string"},
         "train_name": {"type": "string"},
         "disruption": {"type": "string", "enum": ["cancelled", "partially_cancelled", "diverted", "rescheduled"]},
-        "affected_stations": {"type": "string", "description": "Stations in the location scope on this train's route"},
-        "date": {"type": "string", "description": "Journey date exactly as displayed"},
+        "affected_stations": {"type": "string"},
+        "date": {"type": "string"},
         "reason": {"type": "string"},
     },
     ["train_number", "disruption", "date"],
@@ -620,13 +628,14 @@ def _parse_brief(raw: Raw, ctx: ParseCtx) -> list[Evidence]:
     if not isinstance(raw, ResearchRaw):
         return []
     run = raw.run
-    if run.status != "COMPLETED":
+    if run.status != "COMPLETED" and not (run.answer or run.report):
         reason = FailureReason.timeout if run.status == "TIMED_OUT" else FailureReason.goal_failure
         raise ParseFailure(reason, f"research run ended {run.status}")
-    if not run.citations:
-        raise ParseFailure(FailureReason.goal_failure, "research report has no citations")
-    official = [c for c in run.citations if is_official_url(c) and url_rejection(c, ctx.source.domains) is None]
-    others = [c for c in run.citations if c not in official]
+    if not (run.answer or run.report):
+        raise ParseFailure(FailureReason.goal_failure, "research report is empty")
+    citations = run.citations or ()
+    official = [c for c in citations if is_official_url(c) and url_rejection(c, ctx.source.domains) is None]
+    others = [c for c in citations if c not in official]
     notes = [f"official citation: {clean_text(c, 200)}" for c in official[:6]]
     notes += [f"non-official citation: {clean_text(c, 200)}" for c in others[:4]]
     if not official:

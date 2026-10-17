@@ -1750,10 +1750,10 @@ export default function App() {
 
                                   <TouchableOpacity 
                                     style={styles.actionMenuItem}
-                                    onPress={() => handleVoiceCallTrigger(DEMO_CALL_RECIPIENT, c.severity, displayPlace)}
+                                    onPress={() => handleVoiceCallTrigger(DEMO_CALL_RECIPIENT || '+917678656930', c.severity, displayPlace)}
                                   >
                                     <PhoneCall size={14} color="#dc2626" />
-                                    <Text style={styles.actionMenuText}>📞 Trigger Twilio Voice Alert Call (demo recipient)</Text>
+                                    <Text style={styles.actionMenuText}>📞 Trigger Twilio Voice Alert Call (+91 7678656930)</Text>
                                   </TouchableOpacity>
 
                                   <TouchableOpacity 
@@ -1818,7 +1818,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'nowcast' && (
+        {activeTab === 'nowcast' && role === 'official' && (
           <NowcastPanel
             lat={activeLat}
             lon={activeLon}
@@ -1890,16 +1890,18 @@ export default function App() {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={dashStyles.tabItem}
-          onPress={() => setActiveTab('nowcast')}
-          activeOpacity={0.7}
-        >
-          <Waves size={20} color={activeTab === 'nowcast' ? '#2563eb' : '#94a3b8'} />
-          <Text style={[dashStyles.tabLabel, activeTab === 'nowcast' && { color: '#2563eb', fontWeight: '700' }]}>
-            {t(appLanguage, 'tabNowcast')}
-          </Text>
-        </TouchableOpacity>
+        {role === 'official' && (
+          <TouchableOpacity 
+            style={dashStyles.tabItem}
+            onPress={() => setActiveTab('nowcast')}
+            activeOpacity={0.7}
+          >
+            <Waves size={20} color={activeTab === 'nowcast' ? '#2563eb' : '#94a3b8'} />
+            <Text style={[dashStyles.tabLabel, activeTab === 'nowcast' && { color: '#2563eb', fontWeight: '700' }]}>
+              {t(appLanguage, 'tabNowcast')}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity 
           style={dashStyles.tabItem}

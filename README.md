@@ -10,12 +10,14 @@
 [![AWS MCP Server](https://img.shields.io/badge/MCP-16%20AWS%20Tools%20v2.0.0-8A2BE2.svg?style=flat)](https://modelcontextprotocol.io)
 [![Amazon Bedrock](https://img.shields.io/badge/Amazon%20Bedrock-Claude%203%20Haiku-232F3E.svg?style=flat&logo=anthropic)](https://aws.amazon.com/bedrock/)
 [![Google Gemini](https://img.shields.io/badge/Google%20Gemini-2.5%20Flash-4285F4.svg?style=flat&logo=google)](https://ai.google.dev/)
+[![Android APK](https://img.shields.io/badge/Android%20APK-v1.0.0%20Direct%20Download-34A853.svg?style=flat&logo=android)](https://expo.dev/artifacts/eas/isfpoGm44k0wFhYXlVvSj3JBe9-WcBdcEVIFyCfP1Wk.apk)
+[![TinyFish Web Intel](https://img.shields.io/badge/Web%20Intel-TinyFish%20Autonomous%20Agents-00C49F.svg?style=flat)](https://tinyfish.ai)
 [![SegFormer](https://img.shields.io/badge/Vision%20Transformer-MiT--B2%20Dual--Encoder-FF6F00.svg?style=flat)](https://huggingface.co/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <br/>
 
-**Aegis is an end-to-end autonomous disaster response platform fusing dual-encoder satellite Earth observation (SAR C-Band + Optical), sub-meter physical elevation intelligence (MirEye API / USGS 3DEP DEM), continuous Topographic Wetness Index (TWI) hydrology, and 4D ConvGRU flood depth nowcasting with a production-grade 12-Service AWS Free Tier Cloud Ecosystem and formal Model Context Protocol (MCP) server.**
+**Aegis is an end-to-end autonomous disaster response platform fusing dual-encoder satellite Earth observation (SAR C-Band + Optical), sub-meter physical elevation intelligence (MirEye API / USGS 3DEP DEM), continuous Topographic Wetness Index (TWI) hydrology, TinyFish autonomous web intelligence, and 4D ConvGRU flood depth nowcasting with a production-grade 12-Service AWS Free Tier Cloud Ecosystem, formal Model Context Protocol (MCP) server, role-based civilian/commander interfaces, and standalone mobile Android application.**
 
 </div>
 
@@ -41,14 +43,19 @@
    - [Elevation-Penalized Dijkstra Evacuation Routing](#elevation-penalized-dijkstra-evacuation-routing)
    - [Empirical Validation: Naive vs. Context-Aware Routing](#empirical-validation-naive-vs-context-aware-routing)
 6. [Autonomous 6-Agent LangGraph Pipeline & HITL](#-autonomous-6-agent-langgraph-pipeline--hitl)
-7. [Cross-Platform Mobile & Web Tactical Interface](#-cross-platform-mobile--web-tactical-interface)
+7. [TinyFish Autonomous Web Intelligence Engine](#-tinyfish-autonomous-web-intelligence-engine)
+8. [Cross-Platform Mobile & Web Tactical Interface](#-cross-platform-mobile--web-tactical-interface)
+   - [Role-Based Access Control (Citizen vs. Official)](#role-based-access-control-citizen-vs-official-commander)
+   - [Automated Emergency Voice Call Alert System](#automated-emergency-voice-call-alert-system)
+   - [Standalone Android APK Direct Download](#standalone-android-apk-release)
    - [Tactical Disaster Map Visualizations](#-tactical-disaster-map-visualizations)
-8. [Complete REST API Reference](#-complete-rest-api-reference)
-9. [Repository Structure](#-repository-structure)
-10. [Installation & Quickstart Guide](#-installation--quickstart-guide)
-11. [Environment Configuration Reference (`.env`)](#-environment-configuration-reference-env)
-12. [Security, Privacy & Resilience](#-security-privacy--resilience)
-13. [License & Acknowledgments](#-license--acknowledgments)
+9. [Complete REST API Reference](#-complete-rest-api-reference)
+10. [Repository Structure](#-repository-structure)
+11. [Installation & Quickstart Guide](#-installation--quickstart-guide)
+    - [Standalone Android APK Direct Download & Installation](#step-6-standalone-android-apk-direct-download--installation-)
+12. [Environment Configuration Reference (`.env`)](#-environment-configuration-reference-env)
+13. [Security, Privacy & Resilience](#-security-privacy--resilience)
+14. [License & Acknowledgments](#-license--acknowledgments)
 
 ---
 
@@ -538,9 +545,73 @@ The disaster decision-making pipeline is driven by an autonomous **6-Agent LangG
 
 ---
 
+## 🌐 TinyFish Autonomous Web Intelligence Engine
+
+While satellites deliver periodic wide-area boundary masks and physical DEM models predict terrain flow dynamics, catastrophic floods evolve minute-by-minute with localized incidents that orbital passes and static terrain models cannot capture in real time (e.g., sudden dam gate releases, flash cloudbursts, bridge washouts, railway cancellations, and official localized evacuation decrees).
+
+Aegis solves this with an integrated **TinyFish Autonomous Web Intelligence Agent** that autonomously crawls, extracts, and cross-verifies multi-source live ground intelligence:
+
+```
+                                  TINYFISH LIVE WEB INTELLIGENCE
+  ┌────────────────────────────────────────────────────────────────────────────────────────┐
+  │                                MULTI-SOURCE WEB HARVESTING                             │
+  │ • Central Water Commission (CWC) Portal  • India Meteorological Department (IMD) Alerts│
+  │ • NDMA SACHET CAP Warning Feed          • NHAI / MoRTH Highway & Road Advisories       │
+  │ • Autonomous Web News Search             • Train & Transit Disruption Trackers          │
+  └───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                              │
+                                              ▼
+  ┌────────────────────────────────────────────────────────────────────────────────────────┐
+  │                           TINYFISH AUTONOMOUS BROWSER AGENTS                           │
+  │ • Real-time Headless Navigation & Form Submission via TinyFish Agent / Browser APIs    │
+  │ • Resilient Direct Scraper Fallbacks (SSRF-Safe, Proxy-Resilient, District Fuzzy-Match) │
+  └───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                              │
+                                              ▼
+  ┌────────────────────────────────────────────────────────────────────────────────────────┐
+  │                            GROUND REALITY SYNTHESIS & SCORING                          │
+  │ • Corroboration Engine: Matches Web Reports against SegFormer Satellite Inundation Mask│
+  │ • Risk & Urgency Extraction: Identifies water depth spikes, blocked transit, & closures│
+  │ • Feeds directly into HITL Dispatch & Commander Operational Situational Report (SITREP)│
+  └────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Resilient Multi-Tier Fallback:** Built with high-availability engineering. If an external government portal exhibits API throttling, rate limits, or transient timeouts, the system automatically falls back from the deep browser crawler to optimized direct HTTP scrapers and persistent local intelligence snapshots, ensuring 100% operational uptime.
+- **District Fuzzy-Matching:** Gracefully handles non-standard locality names (e.g., matching neighborhood sub-localities to their overarching administrative revenue district warnings).
+- **Satellite Cross-Verification:** Discovered flood reports are mathematically corroborated with SegFormer satellite inundation polygons to filter out unverified social rumors.
+
+---
+
 ## 📱 Cross-Platform Mobile & Web Tactical Interface
 
-Built using **React Native & Expo SDK 57**, the frontend provides a unified interface across **Web** and **Android / iOS**:
+Built using **React Native & Expo SDK 57**, the frontend provides a unified interface across **Web** and **Android / iOS**, featuring strict **Role-Based Access Control (RBAC)**:
+
+### Role-Based Access Control (Citizen vs. Official Commander)
+
+```
+                            ROLE-BASED ERGONOMIC SEGREGATION
+ ┌──────────────────────────────────────────────┐ ┌──────────────────────────────────────────────┐
+ │             CITIZEN INTERFACE                │ │         OFFICIAL COMMANDER INTERFACE         │
+ │ • Interactive Real-Time Inundation Map       │ │ • Full 4D Spatiotemporal Nowcasting Player   │
+ │ • Elevation-Weighted Evacuation Routes       │ │   (Interactive +1h/+2h/+4h/+6h Depth Sim)    │
+ │ • Safe High-Ground Emergency Shelter Pins    │ │ • Autonomous 6-Agent LangGraph Orchestrator  │
+ │ • Offline-First Ground Issue Reporter        │ │ • TinyFish Autonomous Web Intel Dashboard    │
+ │   (Amazon Rekognition Photo AI Badges)       │ │ • Human-in-the-Loop (HITL) Alert Approver    │
+ │ • Instant Emergency Helpline Dialer          │ │ • Multi-Agency SITREP Generation & Export    │
+ └──────────────────────────────────────────────┘ └──────────────────────────────────────────────┘
+```
+
+- **Citizen Safety Interface:** Designed to prevent civilian panic and cognitive overload during an emergency. Civilians see verified flood zones, safe evacuation routes to higher-elevation relief shelters, and an offline-first issue reporting form with automated GPS and Amazon Rekognition verification badges. Advanced 4D temporal forecast scrubbers and agent triage tools are hidden from normal citizen views to eliminate misinformation.
+- **Official / Incident Commander Interface:** Gives disaster management personnel full operational oversight. Commanders switch to the `Official` role to unlock the **4D Spatiotemporal Nowcasting Player** (simulating water depth from +1h to +6h), **Agent Autonomy Panel**, **TinyFish Web Intelligence Crawler**, and the **Human-in-the-Loop (HITL) Alert Authorization Gateway**.
+
+### Automated Emergency Voice Call Alert System
+- **Twilio Voice & Amazon Polly Integration:** Aegis includes a direct voice alerting mechanism that triggers automated phone dispatches directly to official response lines (configured to field responder `+917678656930`).
+- **Neural Bilingual Synthesis:** Synthesizes clear spoken audio in Indian English (`Raveena`) and Hindi (`Aditi`), detailing the inundation depth, affected landmarks, and designated safe shelter destinations.
+
+### Standalone Android APK Release
+A pre-compiled, production-ready standalone `.apk` is built and ready for immediate deployment on field Android tablets and phones:
+- **Direct Download Link:** [Download `dell-flood-app.apk` (v1.0.0)](https://expo.dev/artifacts/eas/isfpoGm44k0wFhYXlVvSj3JBe9-WcBdcEVIFyCfP1Wk.apk)
+- **EAS Build Artifact Dashboard:** [Expo EAS Build #70cc83e9-a378-4924-a612-e5f82b49c6b2](https://expo.dev/accounts/shahzeb9826/projects/dell-flood-app/builds/70cc83e9-a378-4924-a612-e5f82b49c6b2)
 
 - **Tactical Map HUD:** Leaflet / Google Maps Satellite Hybrid tiles displaying flood polygons, water depth contours, and safe evacuation corridors.
 - **4D Nowcasting Player:** Temporal slider enabling time-scrubbing across 1h, 2h, 4h, and 6h inundation forecasts.
@@ -591,6 +662,15 @@ The FastAPI backend exposes comprehensive REST endpoints alongside the formal MC
 | `POST` | `/api/mcp/execute` | Executes an MCP tool call with SHA-256 audit ledger recording. |
 | `GET` | `/api/mcp/audit-log` | Returns immutable cryptographic audit trail of all AI tool executions. |
 
+### Web Intelligence & Emergency Voice Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/intel/run` | Triggers autonomous TinyFish multi-source web intelligence crawler. |
+| `GET` | `/api/intel/latest` | Returns latest synthesized web intelligence, source veracity, and alerts. |
+| `GET` | `/api/intel/runs` | Lists historical web intelligence runs with timestamped logs. |
+| `GET` | `/api/intel/runs/{run_id}` | Detailed trace and raw data extractions for a specific intelligence run. |
+| `POST` | `/api/alerts/voice-call` | Triggers an automated Twilio emergency voice alert to designated responder (`+917678656930`). |
+
 ### Human-in-the-Loop (HITL) Endpoints
 | Method | Endpoint | Description |
 |---|---|---|
@@ -621,6 +701,11 @@ Aegis/
 │   │   │   ├── flood_agent.py              # Main Agent Orchestrator & HITL Dispatcher
 │   │   │   ├── graph.py                    # LangGraph workflow definition
 │   │   │   └── tools.py                    # Dispatch, SMS, and Twilio voice call tools
+│   │   ├── intel/                          # TinyFish Autonomous Web Intelligence
+│   │   │   ├── direct.py                   # Direct scrapers for official feeds (IMD, CWC, NDMA)
+│   │   │   ├── products.py                 # Multi-source intelligence schemas & models
+│   │   │   ├── runner.py                   # Multi-worker intelligence crawl orchestrator
+│   │   │   └── tinyfish_client.py          # TinyFish Autonomous Browser Agent client
 │   │   ├── api/                            # REST Endpoints
 │   │   │   └── endpoints.py                # Pipeline, nowcast, alerts, complaints, AWS endpoints
 │   │   ├── aws/                            # 12 AWS Free Tier Cloud Services (Dual-Mode)
@@ -660,6 +745,7 @@ Aegis/
 │   │   │   ├── SatelliteDetectionView.tsx  # Dual-encoder satellite radar inspection
 │   │   │   ├── EvacuationRoutesView.tsx    # Interactive evacuation corridors & Location Svc
 │   │   │   ├── AgentPanel.tsx              # Bedrock SITREP viewer & Polly voice player
+│   │   │   ├── WebIntelPanel.tsx           # TinyFish live web intelligence viewer
 │   │   │   ├── MapView.tsx                 # Leaflet / Google Maps Satellite tactical viewer
 │   │   │   └── SettingsModal.tsx           # Bilingual toggle & API endpoint config
 │   │   ├── services/
@@ -781,13 +867,23 @@ python test_aws_mcp_free_tier.py
 
 ---
 
-### Step 6: Standalone Android APK Build (EAS)
+### Step 6: Standalone Android APK Direct Download & Installation 📱
 
-To produce a production `.apk` binary:
+You can directly download and install the pre-compiled Android APK without setting up local mobile build tools:
+
+1. **Direct Download:** [Download `dell-flood-app.apk` (v1.0.0)](https://expo.dev/artifacts/eas/isfpoGm44k0wFhYXlVvSj3JBe9-WcBdcEVIFyCfP1Wk.apk)
+2. **Install on Android:**
+   - Transfer or download the `.apk` directly to your Android device.
+   - Tap the downloaded file to install (enable *"Install from Unknown Sources"* if prompted).
+   - Launch Aegis and select **Citizen** or **Official** mode.
+
+To recompile or trigger a custom build via Expo Application Services (EAS):
 ```bash
+cd dell-flood-app
 npm install -g eas-cli
 npx eas-cli build --platform android --profile preview
 ```
+- **Verified Build Dashboard:** [Expo EAS Build #70cc83e9-a378-4924-a612-e5f82b49c6b2](https://expo.dev/accounts/shahzeb9826/projects/dell-flood-app/builds/70cc83e9-a378-4924-a612-e5f82b49c6b2)
 
 ---
 
