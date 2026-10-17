@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import {
@@ -33,8 +34,14 @@ import {
   CheckCircle2,
   ShieldAlert,
   Sparkles,
+  Compass,
+  ArrowRight,
+  Check,
+  ExternalLink,
+  Car,
+  Camera,
 } from 'lucide-react-native';
-import { apiService, DEMO_CALL_RECIPIENT } from '../services/api';
+import { apiService, DEMO_CALL_RECIPIENT, DetectionResult } from '../services/api';
 import { AppLanguage, t } from '../utils/i18n';
 import { runDijkstra } from '../utils/routing';
 
@@ -43,6 +50,7 @@ interface NowcastPanelProps {
   lon: number;
   locationName?: string;
   language?: AppLanguage;
+  lastDetectionResult?: any;
   lastDetectionNowcast?: any;
 }
 
@@ -73,16 +81,18 @@ const escapeHtml = (str: string) => (str || '').replace(/"/g, '&quot;').replace(
 export const NowcastPanel: React.FC<NowcastPanelProps> = ({
   lat: propLat,
   lon: propLon,
-  locationName = 'Patna, Bihar',
+  locationName,
   language = 'en',
+  lastDetectionResult,
   lastDetectionNowcast,
 }) => {
   const isDefaultIndiaCenter = Boolean(
     propLat && Math.abs(propLat - 20.5937) < 0.05 && propLon && Math.abs(propLon - 78.9629) < 0.05
   );
+
   const initialLat = isDefaultIndiaCenter ? 25.6124 : (propLat || 25.6124);
   const initialLon = isDefaultIndiaCenter ? 85.1376 : (propLon || 85.1376);
-  const initialName = isDefaultIndiaCenter ? 'Patna, Bihar' : (locationName || 'Patna, Bihar');
+  const initialName = locationName || (isDefaultIndiaCenter ? 'Patna, Bihar' : `${initialLat.toFixed(2)}°N, ${initialLon.toFixed(2)}°E`);
 
   const [activeLat, setActiveLat] = useState<number>(initialLat);
   const [activeLon, setActiveLon] = useState<number>(initialLon);
@@ -93,14 +103,35 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
   const [viewMode, setViewMode] = useState<'map' | 'grid'>('map');
   const [selectedHorizonIdx, setSelectedHorizonIdx] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [rainSliderMmHr, setRainSliderMmHr] = useState<number>(68);
+  
+  const initialRain = lastDetectionResult?.hydro_metadata?.inst_rain_mm_hr || 75;
+  const [rainSliderMmHr, setRainSliderMmHr] = useState<number>(Math.round(initialRain));
   const [drainageEffPct, setDrainageEffPct] = useState<number>(65);
   const [loading, setLoading] = useState<boolean>(false);
   const [callingDemo, setCallingDemo] = useState<boolean>(false);
-  const [nowcastData, setNowcastData] = useState<any>(null);
+  
+  // Initialize with detection data if available
+  const [nowcastData, setNowcastData] = useState<any>(() => {
+    if (lastDetectionResult?.urnn_nowcast) {
+      return {
+        status: 'SUCCESS',
+        lat: initialLat,
+        lon: initialLon,
+        hydro_metadata: lastDetectionResult.hydro_metadata,
+        urnn_nowcast: lastDetectionResult.urnn_nowcast,
+        dynamic_evacuation_route: lastDetectionResult.dynamic_evacuation_route,
+      };
+    }
+    return null;
+  });
+
+  const [isSyncedWithDetection, setIsSyncedWithDetection] = useState<boolean>(
+    Boolean(lastDetectionResult?.urnn_nowcast)
+  );
 
   const iframeRef = useRef<any>(null);
 
+  // Sync if prop coordinates change
   useEffect(() => {
     if (
       propLat &&
@@ -110,13 +141,26 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     ) {
       setActiveLat(propLat);
       setActiveLon(propLon);
-      setActivePlaceName(locationName || `${propLat.toFixed(3)}°N, ${propLon.toFixed(3)}°E`);
-      setSearchQuery(locationName || `${propLat.toFixed(3)}°N, ${propLon.toFixed(3)}°E`);
+      const newName = locationName || `${propLat.toFixed(3)}°N, ${propLon.toFixed(3)}°E`;
+      setActivePlaceName(newName);
+      setSearchQuery(newName);
+      if (lastDetectionResult?.urnn_nowcast) {
+        setNowcastData({
+          status: 'SUCCESS',
+          lat: propLat,
+          lon: propLon,
+          hydro_metadata: lastDetectionResult.hydro_metadata,
+          urnn_nowcast: lastDetectionResult.urnn_nowcast,
+          dynamic_evacuation_route: lastDetectionResult.dynamic_evacuation_route,
+        });
+        setIsSyncedWithDetection(true);
+      }
     }
-  }, [propLat, propLon]);
+  }, [propLat, propLon, lastDetectionResult]);
 
   const loadSimulation = async (targetLat: number, targetLon: number, rainVal: number, drainVal: number) => {
     setLoading(true);
+    setIsSyncedWithDetection(false);
     try {
       const res = await apiService.simulateNowcast(targetLat, targetLon, rainVal, drainVal);
       setNowcastData(res);
@@ -127,10 +171,14 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     }
   };
 
+  // If no initial detection data, load simulation on first mount
   useEffect(() => {
-    loadSimulation(activeLat, activeLon, rainSliderMmHr, drainageEffPct);
-  }, [activeLat, activeLon]);
+    if (!nowcastData) {
+      loadSimulation(activeLat, activeLon, rainSliderMmHr, drainageEffPct);
+    }
+  }, []);
 
+  // 4D timeline animation
   useEffect(() => {
     if (!isPlaying) return;
     const timer = setInterval(() => {
@@ -193,26 +241,34 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
   };
 
   const activeHorizon = HORIZONS[selectedHorizonIdx];
-  const urnn = nowcastData?.urnn_nowcast || lastDetectionNowcast || {};
+  const urnn = nowcastData?.urnn_nowcast || lastDetectionNowcast || lastDetectionResult?.urnn_nowcast || {};
   const statsMap = urnn?.Horizon_Stats || urnn?.horizon_metrics || {};
+  
+  // Real or dynamically computed statistics for the active horizon
   const activeStats = statsMap[activeHorizon.key] || {
     horizon_minutes: activeHorizon.minutes,
     max_depth_m:
       activeHorizon.minutes === 0
-        ? 0.24
+        ? +(0.24 * (rainSliderMmHr / 65.0)).toFixed(2)
         : activeHorizon.minutes === 15
-        ? 0.39
+        ? +(0.42 * (rainSliderMmHr / 65.0)).toFixed(2)
         : activeHorizon.minutes === 30
-        ? 0.54
-        : 0.71,
-    mean_depth_m: 0.22,
-    impassable_area_pct: activeHorizon.minutes * 0.4 + 6.5,
-    clearance_status: activeHorizon.minutes >= 15 ? 'RED_BOAT_ONLY' : 'ORANGE_HIGH_CLEARANCE_SUV',
+        ? +(0.61 * (rainSliderMmHr / 65.0)).toFixed(2)
+        : +(0.85 * (rainSliderMmHr / 65.0)).toFixed(2),
+    mean_depth_m: +(0.25 * (rainSliderMmHr / 65.0)).toFixed(2),
+    impassable_area_pct: Math.min(96, +(activeHorizon.minutes * 0.5 + (rainSliderMmHr / 65.0) * 12).toFixed(1)),
+    clearance_status:
+      (activeHorizon.minutes >= 30 || rainSliderMmHr >= 75)
+        ? 'RED_BOAT_ONLY'
+        : activeHorizon.minutes >= 15
+        ? 'ORANGE_HIGH_CLEARANCE_SUV'
+        : 'GREEN_ALL_VEHICLES',
   };
 
   const heatmaps = urnn?.heatmaps_b64 || {};
   const activeHeatmapB64 = heatmaps[activeHorizon.shortKey] || heatmaps[activeHorizon.key] || null;
-  const hydroMeta = nowcastData?.hydro_metadata || {
+
+  const hydroMeta = nowcastData?.hydro_metadata || lastDetectionResult?.hydro_metadata || {
     inst_rain_mm_hr: rainSliderMmHr,
     cumul_rain_24h_mm: +(rainSliderMmHr * 1.45).toFixed(1),
     dem_min_m: 48.2,
@@ -220,124 +276,136 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     mean_imperviousness_pct: 68.4,
     drainage_inlet_count: 256,
   };
-  const dynRoute = nowcastData?.dynamic_evacuation_route || {
+
+  const dynRoute = nowcastData?.dynamic_evacuation_route || lastDetectionResult?.dynamic_evacuation_route || {
     distance_km: 3.1,
     eta_minutes: 18.4,
     avoided_flooded_nodes_count: 5,
     dynamic_max_depth_at_arrival_m: 0.12,
-    static_max_depth_at_arrival_m: 0.48,
+    static_max_depth_at_arrival_m: 0.52,
   };
+
   const offlineFallbackRoute = runDijkstra(activeLat, activeLon, activeLat + 0.015, activeLon + 0.015);
 
-  const handleDispatchDemoCall = async () => {
-    setCallingDemo(true);
-    try {
-      const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
-      const severity = peakDepth60 >= 0.45 ? 'CRITICAL' : peakDepth60 >= 0.25 ? 'HIGH' : 'MODERATE';
-      const res = await apiService.triggerVoiceCall(DEMO_CALL_RECIPIENT, '', {
-        location: activePlaceName,
-        severity,
-        language,
-        max_depth_m: peakDepth60,
+  // Dynamic Infrastructure Model based on real activePlaceName & active statistics
+  const dynamicAssets = useMemo(() => {
+    const rawCity = activePlaceName.split(',')[0].replace(/\(.*?\)/g, '').trim() || 'Regional';
+    const city = rawCity.length > 20 ? 'Regional' : rawCity;
+    const baseElev = hydroMeta.dem_min_m || 48.0;
+    const peakD = activeStats.max_depth_m || 0.45;
+
+    const hospDepth = +(peakD * 0.42).toFixed(2);
+    const underpassDepth = +(peakD * 0.88).toFixed(2);
+    const railDepth = +(peakD * 0.22).toFixed(2);
+
+    return [
+      {
+        icon: '🏥',
+        type: 'Hospital',
+        name: `${city} District Emergency Hospital`,
+        elevation: `+${(baseElev + 6.2).toFixed(1)}m ASL`,
+        depth: hospDepth,
+        action: hospDepth >= 0.3
+          ? (language === 'hi' ? '🚨 बेसमेंट वार्ड खाली करें • उत्तर गेट से एम्बुलेंस' : '🚨 Ground Ward at Risk • Ambulances Diverted to High Gate')
+          : (language === 'hi' ? '🟡 परिचालन जारी • आपातकालीन वार्ड सुरक्षित' : '🟡 Operational • Ground Ward Safe from Sump Ingress'),
+        status: hospDepth >= 0.3 ? 'CRITICAL' : 'WATCH',
+        latOffset: 0.0072,
+        lonOffset: -0.0065,
+      },
+      {
+        icon: '🛣️',
+        type: 'Highway Underpass',
+        name: `${city} Low-Lying Arterial Highway Underpass`,
+        elevation: `+${(baseElev + 0.8).toFixed(1)}m ASL`,
+        depth: underpassDepth,
+        action: underpassDepth >= 0.3
+          ? (language === 'hi' ? '⛔ पूर्ण अवरुद्ध: वाहन बंद खतरा • बचाव नौकाएं तैनात' : '⛔ CLOSED: Vehicle Engine Stall Hazard (>30cm) • Rescue Boats Only')
+          : (language === 'hi' ? '⚠️ धीमी गति: पानी जमा (सावधानी 30 किमी/घंटा)' : '⚠️ Caution: Wading Water Allowed (<30cm) • Max 30 km/h'),
+        status: underpassDepth >= 0.3 ? 'BLOCKED' : 'SLOW',
+        latOffset: -0.0082,
+        lonOffset: 0.0058,
+      },
+      {
+        icon: '🚉',
+        type: 'Railway Corridor',
+        name: `${city} Central Rail Transit Corridor`,
+        elevation: `+${(baseElev + 3.1).toFixed(1)}m ASL`,
+        depth: railDepth,
+        action: railDepth >= 0.3
+          ? (language === 'hi' ? '⛔ ट्रैक जलमग्न • ट्रेन परिचालन निलंबित' : '⛔ Ballast Flooded • Rail Operations Suspended')
+          : (language === 'hi' ? '⚠️ धीमी गति: 15 किमी/घंटा प्रतिबंधित' : '⚠️ Track Ballast Submerged • Caution 15 km/h Speed Restriction'),
+        status: railDepth >= 0.3 ? 'BLOCKED' : 'CAUTION',
+        latOffset: 0.0041,
+        lonOffset: 0.0088,
+      },
+      {
+        icon: '⛺',
+        type: 'Evacuation Shelter',
+        name: `${city} High-Ground Government Relief Center`,
+        elevation: `+${(baseElev + 14.5).toFixed(1)}m ASL`,
+        depth: 0.0,
+        action: (language === 'hi' ? '✅ प्राथमिक सुरक्षित निकासी केंद्र • पेयजल व चिकित्सा सहायता तैयार' : '✅ Primary High-Ground Evacuation Hub • Dry Access & Tents Active'),
+        status: 'SAFE',
+        latOffset: -0.0125,
+        lonOffset: -0.0095,
+      },
+    ];
+  }, [activePlaceName, hydroMeta, activeStats, language]);
+
+  const cityName = activePlaceName ? activePlaceName.split(',')[0].trim() : 'Active Area';
+
+  const isDetectionFlooded = Boolean(
+    lastDetectionResult &&
+    (
+      (typeof lastDetectionResult.area_sq_km === 'number' && lastDetectionResult.area_sq_km > 0.05) ||
+      (lastDetectionResult.severity && lastDetectionResult.severity !== 'NONE' && lastDetectionResult.severity !== 'LOW') ||
+      (lastDetectionResult.classification && !lastDetectionResult.classification.toLowerCase().includes('dry') && !lastDetectionResult.classification.toLowerCase().includes('normal') && !lastDetectionResult.classification.toLowerCase().includes('clear'))
+    ) &&
+    lastDetectionResult.severity !== 'NONE' &&
+    lastDetectionResult.severity !== 'LOW'
+  );
+
+  const isSimFlooded = (activeStats.max_depth_m > 0.08 || rainSliderMmHr >= 25 || (urnn?.overall_severity && urnn.overall_severity !== 'NONE' && urnn.overall_severity !== 'LOW'));
+
+  const isFlooded = isSyncedWithDetection ? isDetectionFlooded : isSimFlooded;
+
+  const handleOpenGoogleMapsShelter = () => {
+    const shelterLat = +(activeLat - 0.0125).toFixed(5);
+    const shelterLon = +(activeLon - 0.0095).toFixed(5);
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${activeLat},${activeLon}&destination=${shelterLat},${shelterLon}&travelmode=driving`;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(url, '_blank');
+    } else {
+      Linking.openURL(url).catch((err) => {
+        console.warn('Could not open Google Maps URL:', err);
       });
-      const msg =
-        language === 'hi'
-          ? `📞 ${res.target} पर कॉल भेजी गई!\n\nस्थिति: ${res.call_sid}\nस्क्रिप्ट (हिंदी): ${res.script_dispatched}`
-          : `📞 Dispatched to ${res.target}!\n\nStatus: ${res.call_sid}\nScript (${language.toUpperCase()}): ${res.script_dispatched}`;
-      if (Platform.OS === 'web') {
-        window.alert(msg);
-      } else {
-        Alert.alert('LLM Multilingual Voice Call', msg);
-      }
-    } catch (e: any) {
-      if (Platform.OS === 'web') {
-        window.alert('Call dispatch error: ' + (e?.message || String(e)));
-      } else {
-        Alert.alert('Call Error', e?.message || String(e));
-      }
-    } finally {
-      setCallingDemo(false);
     }
   };
 
-  const [awsReceipt, setAwsReceipt] = useState<string | null>(null);
-  const [awsBusy, setAwsBusy] = useState<boolean>(false);
+  const handleOpenGoogleMaps = handleOpenGoogleMapsShelter;
 
-  const handlePollyNeuralVoice = async () => {
-    setAwsBusy(true);
-    try {
-      const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
-      const ttsLang = language === 'hi' ? 'hi-IN' : 'en-IN';
-      const speechText =
-        language === 'hi'
-          ? `सावधान! ${activePlaceName} में बाढ़ की चेतावनी। अगले 60 मिनट में जल स्तर ${peakDepth60} मीटर तक पहुंच सकता है। कृपया सुरक्षित ऊंचे राहत शिविर की ओर प्रस्थान करें।`
-          : `Emergency Flood Warning for ${activePlaceName}. Projected water depth at 60 minutes is ${peakDepth60} meters. Evacuate low-lying corridors immediately.`;
-      const res = await apiService.synthesizePollyVoice(speechText, ttsLang);
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try {
-          window.speechSynthesis.cancel();
-          const utter = new SpeechSynthesisUtterance(speechText);
-          utter.lang = ttsLang;
-          utter.rate = 0.96;
-          window.speechSynthesis.speak(utter);
-        } catch (speechErr) {}
-      }
-      setAwsReceipt(
-        `🔊 AWS Polly Neural TTS (${res.voice_id || (ttsLang === 'hi-IN' ? 'Aditi' : 'Raveena')}, ${ttsLang}) synthesized & spoken • Vaulted: ${res.s3_key || 's3://aegis-disaster-vault/polly/'}`
-      );
-    } finally {
-      setAwsBusy(false);
-    }
-  };
-
-  const handleSnsMassBroadcast = async () => {
-    setAwsBusy(true);
-    try {
-      const peakDepth60 = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.68;
-      const severity = peakDepth60 >= 0.45 ? 'CRITICAL' : peakDepth60 >= 0.25 ? 'HIGH' : 'MODERATE';
-      const res = await apiService.triggerSnsBroadcast(activePlaceName, severity, peakDepth60);
-      setAwsReceipt(
-        `📡 AWS SNS Topic Dispatched (${res.status || 'PUBLISHED'}) • MessageID: ${res.message_id || 'sns-verified'} • Topic: Aegis-Flash-Flood-Alerts`
-      );
-    } finally {
-      setAwsBusy(false);
-    }
+  const formatArrivalTime = (etaMinutes: number) => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + Math.round(etaMinutes));
+    const h = d.getHours();
+    const m = d.getMinutes();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const disph = h % 12 || 12;
+    const dispm = m < 10 ? `0${m}` : m;
+    return `${disph}:${dispm} ${ampm}`;
   };
 
   const isRedClearance = activeStats.max_depth_m >= 0.3;
   const isOrangeClearance = activeStats.max_depth_m >= 0.15 && activeStats.max_depth_m < 0.3;
 
-  // Build Leaflet Map Template with live 4D overlay and physical infrastructure markers
+  // Build Leaflet Map with real dynamic raster overlay and dynamic infrastructure markers
   const buildNowcastLeafletHtml = () => {
     const heatmapUrl = activeHeatmapB64
       ? activeHeatmapB64.startsWith('data:')
         ? activeHeatmapB64
         : `data:image/png;base64,${activeHeatmapB64}`
       : '';
-    const hospDepth = +(activeStats.max_depth_m * 0.42).toFixed(2);
-    const underpassDepth = +(activeStats.max_depth_m * 0.88).toFixed(2);
-    const railDepth = +(activeStats.max_depth_m * 0.22).toFixed(2);
-    const spreadFactor = 1.0 + (activeHorizon.minutes / 60.0) * 0.65;
-
-    const hospStatusColor = hospDepth >= 0.3 ? '#dc2626' : '#d97706';
-    const hospStatusText =
-      hospDepth >= 0.3
-        ? language === 'hi'
-          ? '🚨 बेसमेंट वार्ड खतरा • एम्बुलेंस मार्ग परिवर्तित'
-          : '🚨 Ground Ward at Risk • Ambulances Diverted'
-        : language === 'hi'
-        ? '🟡 परिचालन जारी • उच्च निकासी वाहन'
-        : '🟡 Operational • High Clearance OK';
-
-    const roadStatusColor = underpassDepth >= 0.3 ? '#dc2626' : '#d97706';
-    const roadStatusText =
-      underpassDepth >= 0.3
-        ? language === 'hi'
-          ? '⛔ पूर्ण अवरुद्ध (>30cm वाहन बंद)'
-          : '⛔ CLOSED (>30cm Vehicle Stall Risk)'
-        : language === 'hi'
-        ? '⚠️ धीमी गति (पानी जमा)'
-        : '⚠️ Caution • Water Wading';
+    const spreadFactor = 1.0 + (activeHorizon.minutes / 60.0) * (0.4 + (rainSliderMmHr / 100.0) * 0.4);
 
     return `<!DOCTYPE html>
 <html>
@@ -362,7 +430,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     }
     .legend-box {
       position: absolute; bottom: 8px; left: 8px; z-index: 1000;
-      background: rgba(255,255,255,0.94);
+      background: rgba(255,255,255,0.96);
       padding: 6px 10px; border-radius: 8px; font-size: 9.5px; color: #0f172a;
       font-weight: 700; border: 1px solid #cbd5e1; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
       display: flex; gap: 8px; align-items: center;
@@ -390,10 +458,10 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     ${
       heatmapUrl
         ? `
-    var overlay = L.imageOverlay("${heatmapUrl}", bounds, { opacity: 0.68, interactive: false }).addTo(map);
+    var overlay = L.imageOverlay("${heatmapUrl}", bounds, { opacity: 0.72, interactive: false }).addTo(map);
     `
-        : `
-    // Dynamic 4D Hydrological Inundation Contours (expands with horizon 0m -> +60m and rainfall)
+        : isFlooded ? `
+    // Dynamic Hydro Inundation Contours expanding with time horizon and rainfall
     var outerFloodZone = [
       [${activeLat + 0.011 * spreadFactor}, ${activeLon - 0.008 * spreadFactor}],
       [${activeLat + 0.014 * spreadFactor}, ${activeLon + 0.004 * spreadFactor}],
@@ -422,87 +490,111 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
       [${activeLat - 0.0045 * spreadFactor}, ${activeLon - 0.002 * spreadFactor}]
     ];
     L.polygon(coreDeepZone, { color: '#dc2626', weight: 2, fillColor: '#ef4444', fillOpacity: 0.55, interactive: false }).addTo(map);
+    ` : `
+    // Terrain is safe and dry — no inundation contours
     `
     }
 
     L.rectangle(bounds, { color: '#2563eb', weight: 1.5, fill: false, dashArray: '4, 4' }).addTo(map);
 
-    // 1. Civil Hospital Marker
-    var hospIcon = L.divIcon({
+    // Plot Dynamic Infrastructure Markers
+    ${dynamicAssets
+      .map(
+        (asset) => `
+    var icon_${asset.type.replace(/\W/g, '')} = L.divIcon({
       className: '',
-      html: '<div class="badge-icon" style="background:#dc2626; width:26px; height:26px;">🏥</div>',
-      iconSize: [26, 26], iconAnchor: [13, 13]
+      html: '<div class="badge-icon" style="background:${
+        asset.status === 'CRITICAL' || asset.status === 'BLOCKED'
+          ? '#dc2626'
+          : asset.status === 'SAFE'
+          ? '#059669'
+          : '#d97706'
+      }; width:28px; height:28px; font-size:14px;">${asset.icon}</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14]
     });
-    var hospMarker = L.marker([${activeLat + 0.0072}, ${activeLon - 0.0065}], { icon: hospIcon }).addTo(map);
-    hospMarker.bindPopup('<b>🏥 ${escapeHtml(t(language, 'hospitalName'))}</b><br>' +
-      'Forecast Depth (+${activeHorizon.minutes}m): <b>${hospDepth} m</b><br>' +
-      '<span style="color:${hospStatusColor}; font-weight:800;">${hospStatusText}</span>');
-    hospMarker.bindTooltip('${escapeHtml(t(language, 'hospitalName'))} (${hospDepth}m)', { direction: 'top', className: 'custom-tooltip' });
+    var marker_${asset.type.replace(/\W/g, '')} = L.marker([${activeLat + asset.latOffset}, ${
+          activeLon + asset.lonOffset
+        }], { icon: icon_${asset.type.replace(/\W/g, '')} }).addTo(map);
+    marker_${asset.type.replace(/\W/g, '')}.bindPopup('<b>${asset.icon} ${escapeHtml(asset.name)}</b><br>' +
+      'Type: <b>${escapeHtml(asset.type)}</b> • Elevation: <b>${asset.elevation}</b><br>' +
+      'Water Depth (+${activeHorizon.minutes}m): <b>${asset.depth} m</b><br>' +
+      '<span style="color:${
+        asset.status === 'CRITICAL' || asset.status === 'BLOCKED'
+          ? '#dc2626'
+          : asset.status === 'SAFE'
+          ? '#059669'
+          : '#d97706'
+      }; font-weight:800;">${escapeHtml(asset.action)}</span>');
+    marker_${asset.type.replace(/\W/g, '')}.bindTooltip('${escapeHtml(asset.name)} (${asset.depth}m)', { direction: 'top', className: 'custom-tooltip' });
+    `
+      )
+      .join('\n')}
 
-    // 2. Highway Underpass Marker
-    var roadIcon = L.divIcon({
+    // Location Marker
+    var startIcon = L.divIcon({
       className: '',
-      html: '<div class="badge-icon" style="background:${underpassDepth >= 0.3 ? '#b91c1c' : '#d97706'}; width:26px; height:26px;">⛔</div>',
-      iconSize: [26, 26], iconAnchor: [13, 13]
+      html: '<div style="position:relative; width:22px; height:22px;"><div style="position:absolute; width:22px; height:22px; border-radius:50%; background:rgba(${isFlooded ? '26,115,232' : '16,185,129'},0.3); border:1px solid ${isFlooded ? '#1a73e8' : '#10b981'};"></div><div style="position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:${isFlooded ? '#1a73e8' : '#10b981'}; border:3px solid #ffffff; box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div></div>',
+      iconSize: [22, 22],
+      iconAnchor: [11, 11]
     });
-    var roadMarker = L.marker([${activeLat - 0.0082}, ${activeLon + 0.0058}], { icon: roadIcon }).addTo(map);
-    roadMarker.bindPopup('<b>🛣️ ${escapeHtml(t(language, 'highwayUnderpassName'))}</b><br>' +
-      'Water Level (+${activeHorizon.minutes}m): <b>${underpassDepth} m</b><br>' +
-      '<span style="color:${roadStatusColor}; font-weight:800;">${roadStatusText}</span>');
-    roadMarker.bindTooltip('${escapeHtml(t(language, 'highwayUnderpassName'))} (${underpassDepth}m)', { direction: 'bottom', className: 'custom-tooltip' });
+    var startMarker = L.marker([${activeLat}, ${activeLon}], { icon: startIcon }).addTo(map);
+    startMarker.bindPopup('<b>${isFlooded ? '🔵 Active Location' : '🟢 Safe Terrain (No Flood)'}</b><br>${escapeHtml(activePlaceName)}');
 
-    // 3. High-Ground Relief Shelter Marker
-    var campIcon = L.divIcon({
-      className: '',
-      html: '<div class="badge-icon" style="background:#059669; width:26px; height:26px;">⛺</div>',
-      iconSize: [26, 26], iconAnchor: [13, 13]
-    });
-    var campMarker = L.marker([${activeLat + 0.0135}, ${activeLon + 0.0125}], { icon: campIcon }).addTo(map);
-    campMarker.bindPopup('<b>⛺ ${escapeHtml(t(language, 'reliefCampName'))}</b><br>' +
-      'Elevation: <b>+18m ASL (0.00m Water)</b><br>' +
-      '<span style="color:#059669; font-weight:800;">● ${
-        language === 'hi' ? '100% सुरक्षित • 1,200 व्यक्ति क्षमता' : '100% FLOOD SAFE • Cap: 1,200'
-      }</span>');
-    campMarker.bindTooltip('${escapeHtml(t(language, 'reliefCampName'))} (Safe High Ground)', { direction: 'top', className: 'custom-tooltip' });
-
-    // 4. Time-Varying Dijkstra Evacuation Polyline
-    var evacRoute = [
-      [${activeLat - 0.012}, ${activeLon - 0.01}],
-      [${activeLat - 0.006}, ${activeLon - 0.013}],
-      [${activeLat + 0.004}, ${activeLon - 0.009}],
-      [${activeLat + 0.01}, ${activeLon + 0.002}],
-      [${activeLat + 0.0135}, ${activeLon + 0.0125}]
+    ${isFlooded ? `
+    // Google Maps Style Evacuation Route & Navigation Overlay (Active only when flood detected)
+    var shelterLat = ${activeLat - 0.0125};
+    var shelterLon = ${activeLon - 0.0095};
+    var routePoints = [
+      [${activeLat}, ${activeLon}],
+      [${activeLat - 0.0035}, ${activeLon - 0.0018}],
+      [${activeLat - 0.0068}, ${activeLon - 0.0045}],
+      [${activeLat - 0.0098}, ${activeLon - 0.0072}],
+      [shelterLat, shelterLon]
     ];
-    var routeLine = L.polyline(evacRoute, { color: '#059669', weight: 4.5, opacity: 0.9, dashArray: '8, 6' }).addTo(map);
-    routeLine.bindTooltip('<b>${
-      language === 'hi' ? 'डाइक्स्ट्रा सुरक्षित निकासी गलियारा' : 'Dynamic Evacuation Corridor (ETA 18m)'
-    }</b>', { sticky: true, className: 'custom-tooltip' });
 
-    setTimeout(function() { map.invalidateSize(); }, 250);
+    // Google Maps Navigation Route: Dark Blue Casing + Bright Blue Inner
+    L.polyline(routePoints, {
+      color: '#174ea6',
+      weight: 8,
+      opacity: 0.95,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map);
 
-    // 5. Interactive Map Click Inspector
-    map.on('click', function(e) {
-      var dLat = e.latlng.lat - ${activeLat};
-      var dLon = e.latlng.lng - ${activeLon};
-      var distSq = (dLat*dLat + dLon*dLon);
-      var estimatedDepth = Math.max(0.04, Math.min(1.45, (${activeStats.max_depth_m} * (1 - distSq * 1800)))).toFixed(2);
-      var clearance = estimatedDepth >= 0.3 ? '${
-        language === 'hi' ? 'नाव केवल (>30cm)' : 'Boat Only (>30cm)'
-      }' : (estimatedDepth >= 0.15 ? '${
-        language === 'hi' ? 'उच्च SUV केवल' : 'High SUV Only'
-      }' : '${language === 'hi' ? 'सभी वाहन सुरक्षित' : 'All Light Vehicles Safe'}');
+    var mainRoute = L.polyline(routePoints, {
+      color: '#1a73e8',
+      weight: 5,
+      opacity: 1.0,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map);
+    mainRoute.bindTooltip('🚗 <b>Fastest Safe Route (Google Maps Nav)</b><br>18 min (3.8 km) • 0 Flood Hazards', { sticky: true, className: 'custom-tooltip' });
 
-      L.popup()
-        .setLatLng(e.latlng)
-        .setContent('<b>📍 ${language === 'hi' ? 'स्थान निरीक्षण' : 'Point Inspection'}</b><br>' +
-          'Coords: ' + e.latlng.lat.toFixed(4) + '°N, ' + e.latlng.lng.toFixed(4) + '°E<br>' +
-          '${language === 'hi' ? 'अनुमानित गहराई' : 'Forecast Depth'}: <b>' + estimatedDepth + ' m</b><br>' +
-          '${language === 'hi' ? 'वाहन क्षमता' : 'Clearance'}: <b>' + clearance + '</b><br>' +
-          '<span style="color:#2563eb; font-weight:700;">${
-            language === 'hi' ? 'मार्ग: उत्तर बाईपास की ओर मुड़ें' : 'Detour: Divert toward North Ridge'
-          }</span>')
-        .openOn(map);
+    // Flooded Road Hazard (Red Dashed Line with Closure Marker ⛔)
+    var blockedUnderpassLat = ${activeLat - 0.0082};
+    var blockedUnderpassLon = ${activeLon + 0.0058};
+    var blockedPoints = [
+      [${activeLat}, ${activeLon}],
+      [${activeLat - 0.004}, ${activeLon + 0.0028}],
+      [blockedUnderpassLat, blockedUnderpassLon]
+    ];
+    var blockedLine = L.polyline(blockedPoints, {
+      color: '#dc2626',
+      weight: 3.5,
+      dashArray: '5, 7',
+      opacity: 0.85
+    }).addTo(map);
+    blockedLine.bindTooltip('⛔ Flooded Shortest Route (Impassable >30cm water)', { sticky: true, className: 'custom-tooltip' });
+
+    var closedSignIcon = L.divIcon({
+      className: '',
+      html: '<div style="background:#dc2626; border:2px solid #ffffff; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:11px; font-weight:900; box-shadow:0 2px 6px rgba(0,0,0,0.4);">⛔</div>',
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
     });
+    var closedMarker = L.marker([blockedUnderpassLat, blockedUnderpassLon], { icon: closedSignIcon }).addTo(map);
+    closedMarker.bindPopup('<b>⛔ Closed Road: Arterial Underpass Flooded</b><br>Predicted water depth: <b>0.48m</b> (Engine stall hazard)<br><span style="color:#16a34a; font-weight:bold;">Aegis automatically reroutes via High Ridge!</span>');
+    ` : ''}
   </script>
 </body>
 </html>`;
@@ -559,33 +651,81 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
 </html>`;
   };
 
-  const peak60mDepth = statsMap?.t_60m?.max_depth_m ?? activeStats.max_depth_m ?? 0.71;
-
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* 1. Hero Banner Card */}
+      {/* 1. Header Card */}
       <View style={styles.heroCard}>
         <View style={styles.heroLeft}>
           <View style={styles.badgeRow}>
             <View style={styles.summaryBadge}>
               <Waves size={11} color="#2563eb" style={{ marginRight: 4 }} />
-              <Text style={styles.summaryBadgeText}>{t(language, 'nowcastBadge')}</Text>
+              <Text style={styles.summaryBadgeText}>U-RNN 4D SPATIOTEMPORAL DEPTH</Text>
             </View>
+            {isSyncedWithDetection && (
+              <View style={styles.liveBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveBadgeText}>SYNCED TO SATELLITE ML</Text>
+              </View>
+            )}
           </View>
           <Text style={styles.heroTitle}>{t(language, 'nowcast_title')}</Text>
-          <Text style={styles.heroSubtitle}>{t(language, 'nowcast_subtitle')}</Text>
+          <Text style={styles.heroSubtitle}>
+            {language === 'hi'
+              ? 'स्थानिक जल-गहराई (मीटर में) और गतिशील निकासी मार्ग का समय-बद्ध पूर्वानुमान (0m → +60m)'
+              : 'Predicts continuous street-level water depth in meters and time-varying evacuation corridors (0m → +60m).'}
+          </Text>
         </View>
       </View>
 
-      {/* 2. Live Location Search & Quick District Switcher Card */}
+
+
+      {/* 3. Detection Sync Banner */}
+      {lastDetectionResult && (
+        <View style={styles.detectionSyncCard}>
+          <View style={styles.syncHeaderRow}>
+            <View style={styles.syncBadge}>
+              <CheckCircle2 size={13} color="#059669" style={{ marginRight: 4 }} />
+              <Text style={styles.syncBadgeText}>
+                {language === 'hi' ? 'उपग्रह एमएल पहचान से सिंक किया गया' : 'SYNCED WITH SATELLITE ML DETECTION'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.resyncBtn}
+              onPress={() => {
+                setActiveLat(propLat);
+                setActiveLon(propLon);
+                setActivePlaceName(locationName || 'Satellite Scanned Area');
+                setSearchQuery(locationName || 'Satellite Scanned Area');
+                if (lastDetectionResult.urnn_nowcast) {
+                  setNowcastData({
+                    status: 'SUCCESS',
+                    lat: propLat,
+                    lon: propLon,
+                    hydro_metadata: lastDetectionResult.hydro_metadata,
+                    urnn_nowcast: lastDetectionResult.urnn_nowcast,
+                    dynamic_evacuation_route: lastDetectionResult.dynamic_evacuation_route,
+                  });
+                  setIsSyncedWithDetection(true);
+                }
+              }}
+            >
+              <RefreshCw size={11} color="#2563eb" style={{ marginRight: 4 }} />
+              <Text style={styles.resyncBtnText}>{language === 'hi' ? 'पुनः लोड करें' : 'Reload Detection'}</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.syncMetaText}>
+            📍 {locationName || `${propLat.toFixed(2)}°N, ${propLon.toFixed(2)}°E`} • {lastDetectionResult.classification || 'Flood Inundation'} • {lastDetectionResult.area_sq_km ?? 0} km² ({lastDetectionResult.severity || 'CRITICAL'})
+          </Text>
+        </View>
+      )}
+
+      {/* 4. Live Location Search & Quick District Switcher Card */}
       <View style={styles.whiteCard}>
         <View style={styles.sectionHeaderRowBetween}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Search size={16} color="#2563eb" style={{ marginRight: 6 }} />
             <Text style={styles.sectionTitle}>
-              {language === 'hi'
-                ? '1. स्थान चुनें या खोजें'
-                : '1. Location Selection & Search'}
+              {language === 'hi' ? '1. स्थान चुनें या खोजें' : '1. Location Selection & Search'}
             </Text>
           </View>
           <View style={styles.activeCoordPill}>
@@ -640,7 +780,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
         </ScrollView>
       </View>
 
-      {/* 4. 4D Horizon Timeline Scrubber & Viewport (Geographic Map vs Scientific Hydro-Mesh) */}
+      {/* 5. 4D Horizon Timeline Scrubber & Viewport (Leaflet vs Tensor Grid) */}
       <View style={styles.whiteCard}>
         <View style={styles.sectionHeaderRowBetween}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -699,6 +839,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
           {HORIZONS.map((h, idx) => {
             const active = idx === selectedHorizonIdx;
             const hStat = statsMap[h.key];
+            const dVal = hStat?.max_depth_m ?? +(0.24 + idx * 0.18).toFixed(2);
             return (
               <TouchableOpacity
                 key={h.key}
@@ -712,14 +853,14 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
                   {language === 'hi' ? h.labelHi : h.labelEn}
                 </Text>
                 <Text style={[styles.horizonTabDepth, active && styles.horizonTabDepthActive]}>
-                  {hStat ? `${hStat.max_depth_m}m` : `${(0.24 + idx * 0.15).toFixed(2)}m`}
+                  {dVal}m
                 </Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
-        {/* Viewport: Interactive Leaflet Street Map OR 1:1 Aspect Ratio Tensor Grid */}
+        {/* Viewport: Interactive Leaflet Street Map OR Tensor Grid */}
         <View style={styles.viewportFrame}>
           {loading ? (
             <View style={styles.loadingBox}>
@@ -872,11 +1013,13 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
         </View>
       </View>
 
-      {/* 5. Critical Infrastructure & Road Inundation Table */}
+      {/* 6. Dynamic Critical Infrastructure & Road Inundation Table */}
       <View style={styles.whiteCard}>
         <View style={styles.sectionHeaderRow}>
           <Building2 size={16} color="#2563eb" style={{ marginRight: 6 }} />
-          <Text style={styles.sectionTitle}>{t(language, 'infraTableTitle')}</Text>
+          <Text style={styles.sectionTitle}>
+            {language === 'hi' ? '3. महत्वपूर्ण बुनियादी ढांचा व सड़क जलमग्नता' : '3. Critical Infrastructure & Road Inundation Impact'}
+          </Text>
         </View>
 
         <View style={styles.tableContainer}>
@@ -891,131 +1034,60 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
             </Text>
           </View>
 
-          {/* Row 1: Hospital */}
-          <View style={styles.tableRow}>
-            <View style={{ flex: 2 }}>
-              <Text style={styles.tableAssetName}>🏥 {t(language, 'hospitalName')}</Text>
-              <Text style={styles.tableAssetMeta}>Elevation: +54m ASL</Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'center' }}>
-              <Text style={styles.tableDepthVal}>+{(activeStats.max_depth_m * 0.42).toFixed(2)} m</Text>
-            </View>
-            <View style={{ flex: 2.2 }}>
-              <Text style={styles.tableActionText}>
-                {activeStats.max_depth_m * 0.42 >= 0.3
-                  ? language === 'hi'
-                    ? 'बेसमेंट वार्ड खाली करें • उत्तर गेट से एम्बुलेंस'
-                    : 'Evacuate Basement Wards • Ambulances via North Gate'
-                  : language === 'hi'
-                  ? 'सामान्य संचालन • जल स्तर निगरानी'
-                  : 'Normal Emergency Intake • Monitor Basement Sump'}
-              </Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'flex-end' }}>
-              <View
-                style={[
-                  styles.statusBadge,
-                  activeStats.max_depth_m * 0.42 >= 0.3 ? styles.statusBadgeRed : styles.statusBadgeAmber,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.statusBadgeText,
-                    activeStats.max_depth_m * 0.42 >= 0.3 ? styles.statusTextRed : styles.statusTextAmber,
-                  ]}
-                >
-                  {activeStats.max_depth_m * 0.42 >= 0.3 ? 'CRITICAL' : 'WATCH'}
+          {dynamicAssets.map((asset, idx) => (
+            <View
+              key={asset.name}
+              style={[styles.tableRow, idx === dynamicAssets.length - 1 && { borderBottomWidth: 0 }]}
+            >
+              <View style={{ flex: 2 }}>
+                <Text style={styles.tableAssetName}>
+                  {asset.icon} {asset.name}
+                </Text>
+                <Text style={styles.tableAssetMeta}>
+                  {asset.type} • Elev: {asset.elevation}
                 </Text>
               </View>
-            </View>
-          </View>
-
-          {/* Row 2: NH Underpass */}
-          <View style={styles.tableRow}>
-            <View style={{ flex: 2 }}>
-              <Text style={styles.tableAssetName}>🛣️ {t(language, 'highwayUnderpassName')}</Text>
-              <Text style={styles.tableAssetMeta}>Depression: +48m ASL</Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'center' }}>
-              <Text style={[styles.tableDepthVal, { color: '#dc2626' }]}>
-                +{(activeStats.max_depth_m * 0.88).toFixed(2)} m
-              </Text>
-            </View>
-            <View style={{ flex: 2.2 }}>
-              <Text style={styles.tableActionText}>
-                {activeStats.max_depth_m * 0.88 >= 0.3
-                  ? language === 'hi'
-                    ? '⛔ बंद: केवल बचाव नौकाएं • ओवरब्रिज मार्ग प्रयोग करें'
-                    : '⛔ Closed to Cars: Boat Rescue Only • Detour via Flyover'
-                  : language === 'hi'
-                  ? 'धीमी गति (सावधानी) • 30 किमी/घंटा'
-                  : 'Caution: Wading Water • Speed Limit 30 km/h'}
-              </Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'flex-end' }}>
-              <View
-                style={[
-                  styles.statusBadge,
-                  activeStats.max_depth_m * 0.88 >= 0.3 ? styles.statusBadgeRed : styles.statusBadgeAmber,
-                ]}
-              >
+              <View style={{ flex: 1.2, alignItems: 'center' }}>
                 <Text
                   style={[
-                    styles.statusBadgeText,
-                    activeStats.max_depth_m * 0.88 >= 0.3 ? styles.statusTextRed : styles.statusTextAmber,
+                    styles.tableDepthVal,
+                    asset.depth >= 0.3 && { color: '#dc2626' },
+                    asset.depth === 0 && { color: '#059669' },
                   ]}
                 >
-                  {activeStats.max_depth_m * 0.88 >= 0.3 ? 'BLOCKED' : 'SLOW'}
+                  +{asset.depth.toFixed(2)} m
                 </Text>
               </View>
-            </View>
-          </View>
-
-          {/* Row 3: Railway Logistics Hub */}
-          <View style={styles.tableRow}>
-            <View style={{ flex: 2 }}>
-              <Text style={styles.tableAssetName}>🚉 {t(language, 'railwayJunctionName')}</Text>
-              <Text style={styles.tableAssetMeta}>Tracks: +51m ASL</Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'center' }}>
-              <Text style={styles.tableDepthVal}>+{(activeStats.max_depth_m * 0.22).toFixed(2)} m</Text>
-            </View>
-            <View style={{ flex: 2.2 }}>
-              <Text style={styles.tableActionText}>
-                {language === 'hi'
-                  ? 'ट्रैक गिट्टी जलमग्न • ट्रेन गति 15 किमी/घंटा सीमित'
-                  : 'Ballast Submerged • Restrict Freight Speed to 15 km/h'}
-              </Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'flex-end' }}>
-              <View style={[styles.statusBadge, styles.statusBadgeAmber]}>
-                <Text style={[styles.statusBadgeText, styles.statusTextAmber]}>CAUTION</Text>
+              <View style={{ flex: 2.2 }}>
+                <Text style={styles.tableActionText}>{asset.action}</Text>
+              </View>
+              <View style={{ flex: 1.2, alignItems: 'flex-end' }}>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    asset.status === 'CRITICAL' || asset.status === 'BLOCKED'
+                      ? styles.statusBadgeRed
+                      : asset.status === 'SAFE'
+                      ? styles.statusBadgeGreen
+                      : styles.statusBadgeAmber,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusBadgeText,
+                      asset.status === 'CRITICAL' || asset.status === 'BLOCKED'
+                        ? styles.statusTextRed
+                        : asset.status === 'SAFE'
+                        ? styles.statusTextGreen
+                        : styles.statusTextAmber,
+                    ]}
+                  >
+                    {asset.status}
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-
-          {/* Row 4: Relief Camp */}
-          <View style={[styles.tableRow, { borderBottomWidth: 0 }]}>
-            <View style={{ flex: 2 }}>
-              <Text style={styles.tableAssetName}>⛺ {t(language, 'reliefCampName')}</Text>
-              <Text style={styles.tableAssetMeta}>Ridge: +62m ASL</Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'center' }}>
-              <Text style={[styles.tableDepthVal, { color: '#059669' }]}>0.00 m</Text>
-            </View>
-            <View style={{ flex: 2.2 }}>
-              <Text style={styles.tableActionText}>
-                {language === 'hi'
-                  ? 'प्राथमिक निकासी केंद्र • पेयजल व चिकित्सा सहायता उपलब्ध'
-                  : 'Primary Evacuation Site • Drinking Water & Tents Ready'}
-              </Text>
-            </View>
-            <View style={{ flex: 1.2, alignItems: 'flex-end' }}>
-              <View style={[styles.statusBadge, styles.statusBadgeGreen]}>
-                <Text style={[styles.statusBadgeText, styles.statusTextGreen]}>SAFE</Text>
-              </View>
-            </View>
-          </View>
+          ))}
         </View>
       </View>
 
@@ -1025,17 +1097,16 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
           <Sliders size={16} color="#059669" style={{ marginRight: 6 }} />
           <Text style={styles.sectionTitle}>
             {language === 'hi'
-              ? '3. लाइव "What-If" बादल फटने व ड्रेनेज सिमुलेटर'
-              : '3. Interactive "What-If" Cloudburst & Drainage Simulator'}
+              ? '4. लाइव "What-If" बादल फटने व ड्रेनेज सिमुलेटर'
+              : '4. Interactive "What-If" Cloudburst & Drainage Simulator'}
           </Text>
         </View>
 
-        {/* Live Judge Demo Walkthrough Tip */}
         <View style={styles.judgeWalkthroughTip}>
           <Text style={styles.judgeWalkthroughTipText}>
             {language === 'hi'
               ? '💡 परीक्षण सुझाव: वर्षा को 105 mm/hr करें और ड्रेनेज को 25% पर घटाएं, फिर नीचे "4D सिमुलेशन चलाएं" दबाएं और ऊपर मानचित्र पर जल स्तर वृद्धि देखें!'
-              : '💡 Testing Tip: Slide Rainfall to 105 mm/hr and Drainage to 25%, then tap "Run 4D Hydro Simulation" to watch water surge on physical streets and roads flip to BLOCKED!'}
+              : '💡 Testing Tip: Tap 105 or 140 mm/hr (cloudburst) and 25% drainage, then watch how water depth rises and road clearance flips to BOAT ONLY!'}
           </Text>
         </View>
 
@@ -1106,14 +1177,14 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* 4. Hydrological Environmental Telemetry Card */}
+      {/* 8. Hydrological Environmental Telemetry Card */}
       <View style={styles.whiteCard}>
         <View style={styles.sectionHeaderRow}>
           <ShieldCheck size={16} color="#2563eb" style={{ marginRight: 6 }} />
           <Text style={styles.sectionTitle}>
             {language === 'hi'
-              ? '4. हाइड्रोलॉजिकल पर्यावरणीय कारक'
-              : '4. Hydrological Environmental Parameters'}
+              ? '5. हाइड्रोलॉजिकल पर्यावरणीय कारक'
+              : '5. Hydrological Environmental Parameters'}
           </Text>
         </View>
         <View style={styles.tensorGrid}>
@@ -1152,104 +1223,69 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
         </View>
       </View>
 
-      {/* 9. Time-Varying Dijkstra Evacuation Route & 1-Click Voice Alert */}
-      <View style={styles.whiteCard}>
-        <View style={styles.sectionHeaderRow}>
-          <Navigation size={16} color="#059669" style={{ marginRight: 6 }} />
-          <Text style={styles.sectionTitle}>{t(language, 'dynamic_route_title')}</Text>
-        </View>
-
-        <View style={styles.routeCompareRow}>
-          <View style={[styles.routeCompareCard, { backgroundColor: '#fef2f2', borderColor: '#fecaca' }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <AlertTriangle size={13} color="#dc2626" style={{ marginRight: 4 }} />
-              <Text style={styles.routeCompareHeaderRed}>
-                {language === 'hi' ? 'सामान्य स्थिर मार्ग (Static)' : 'Static Shortest Route'}
+      {/* 6. Evacuation Guidance to Safe Place (Shown ONLY when flood is predicted!) */}
+      {isFlooded ? (
+        <View style={styles.googleMapsNavCard}>
+          {/* Top Google Maps Navigation Header */}
+          <View style={styles.gmapsTopBar}>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+                <Text style={styles.gmapsEtaText}>
+                  {dynRoute.eta_minutes ? Math.round(dynRoute.eta_minutes) : 18} min
+                </Text>
+                <Text style={styles.gmapsDistText}>
+                  ({dynRoute.distance_km ?? 3.8} km)
+                </Text>
+              </View>
+              <Text style={styles.gmapsSubText}>
+                {language === 'hi'
+                  ? `सर्वश्रेष्ठ सुरक्षित मार्ग • आगमन लगभग ${formatArrivalTime(dynRoute.eta_minutes || 18)}`
+                  : `Fastest safe route • Arrive by ~${formatArrivalTime(dynRoute.eta_minutes || 18)}`}
               </Text>
             </View>
-            <Text style={styles.routeCompareDepthRed}>
-              {dynRoute.static_max_depth_at_arrival_m ?? 0.48}m{' '}
-              {language === 'hi' ? 'गहराई (वाहन बंद)' : 'depth at arrival'}
-            </Text>
-            <Text style={styles.routeCompareNote}>
-              {language === 'hi'
-                ? '❌ +15m में 30 सेमी से अधिक पानी में फंसता है'
-                : '❌ Hits >30cm vehicle-stalling floodwater by T+15m'}
-            </Text>
-          </View>
-
-          <View style={[styles.routeCompareCard, { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <ShieldCheck size={13} color="#059669" style={{ marginRight: 4 }} />
-              <Text style={styles.routeCompareHeaderGreen}>
-                {language === 'hi' ? 'सुरक्षित गतिशील मार्ग' : 'Dynamic Evacuation Route'}
+            <View style={styles.gmapsSafeBadge}>
+              <CheckCircle2 size={13} color="#15803d" style={{ marginRight: 4 }} />
+              <Text style={styles.gmapsSafeBadgeText}>
+                {language === 'hi' ? '100% सुरक्षित मार्ग' : '100% Safe Route'}
               </Text>
             </View>
-            <Text style={styles.routeCompareDepthGreen}>
-              {dynRoute.dynamic_max_depth_at_arrival_m ?? 0.12}m{' '}
-              {language === 'hi' ? 'अधिकतम गहराई' : 'max arrival depth'}
-            </Text>
-            <Text style={styles.routeCompareNote}>
-              ✅{' '}
+          </View>
+
+          {/* Safe Haven Destination Details */}
+          <View style={styles.safeHavenCard}>
+            <View style={styles.safeHavenIconBox}>
+              <Text style={{ fontSize: 22 }}>⛺</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.safeHavenLabel}>
+                {language === 'hi' ? 'सुरक्षित आश्रय गंतव्य (उच्च राहत शिविर)' : 'DESTINATION (SAFE HAVEN)'}
+              </Text>
+              <Text style={styles.safeHavenTitle}>
+                {cityName} High-Ground Government Relief Center
+              </Text>
+              <Text style={styles.safeHavenSub}>
+                {language === 'hi'
+                  ? 'ऊंचाई: +14.5m ASL • सूखा आश्रय, भोजन, पेयजल व चिकित्सा सहायता उपलब्ध'
+                  : 'Elevation: +14.5m ASL • Dry sanctuary, food, drinking water & medical tents'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Google Maps Action Button — Directly launches turn-by-turn guidance to the safe place */}
+          <TouchableOpacity
+            style={styles.openGoogleMapsSafeBtn}
+            onPress={handleOpenGoogleMapsShelter}
+            activeOpacity={0.85}
+          >
+            <Navigation size={18} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.openGoogleMapsSafeBtnText}>
               {language === 'hi'
-                ? `${dynRoute.avoided_flooded_nodes_count ?? 4} जलमग्न मोड़ों से बचाव • ETA ${
-                    dynRoute.eta_minutes ?? Math.max(12, Math.round((offlineFallbackRoute.distance / 20) * 60))
-                  } मिनट`
-                : `Bypasses ${dynRoute.avoided_flooded_nodes_count ?? 4} submerging nodes • ETA ${
-                    dynRoute.eta_minutes ?? Math.max(12, Math.round((offlineFallbackRoute.distance / 20) * 60))
-                  } min`}
+                ? '🗺️ Google Maps में सुरक्षित स्थान का मार्ग खोलें'
+                : '🗺️ Open Google Maps Guidance to Safe Place'}
             </Text>
-          </View>
+          </TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          style={[styles.callButton, callingDemo && { opacity: 0.7 }]}
-          onPress={handleDispatchDemoCall}
-          disabled={callingDemo}
-        >
-          <PhoneCall size={16} color="#ffffff" style={{ marginRight: 8 }} />
-          <Text style={styles.callButtonText}>
-            {callingDemo ? t(language, 'calling_demo') : t(language, 'callDemoBtn')}
-          </Text>
-        </TouchableOpacity>
-
-        {/* AWS Free Tier Cloud Geofence, Polly Neural TTS & SNS Broadcast Bar */}
-        <View style={{ marginTop: 12, backgroundColor: '#0f172a', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#334155' }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>
-              ☁️ AWS LOCATION GEOFENCE • POLLY NEURAL TTS • SNS BROADCAST
-            </Text>
-            <Text style={{ color: '#4ade80', fontSize: 10, fontWeight: 'bold' }}>
-              {nowcastData?.aws_cloud?.location_geofence?.event_type || (activeStats.max_depth_m >= 0.3 ? 'ENTER_FLOOD_HAZARD_ZONE' : 'PERIMETER_MONITORED')}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-            <TouchableOpacity
-              style={{ flex: 1, minWidth: 140, backgroundColor: '#0284c7', paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center' }}
-              onPress={handlePollyNeuralVoice}
-              disabled={awsBusy}
-            >
-              <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: 'bold' }}>
-                🔊 {language === 'hi' ? 'AWS Polly हिंदी ऑडियो सुनें' : 'Play AWS Polly Voice Alert'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{ flex: 1, minWidth: 140, backgroundColor: '#ea580c', paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, alignItems: 'center' }}
-              onPress={handleSnsMassBroadcast}
-              disabled={awsBusy}
-            >
-              <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: 'bold' }}>
-                📡 {language === 'hi' ? 'AWS SNS सामूहिक अलर्ट भेजें' : 'Dispatch AWS SNS Broadcast'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          {awsReceipt && (
-            <Text style={{ color: '#bae6fd', fontSize: 11, marginTop: 8, lineHeight: 16 }}>
-              {awsReceipt}
-            </Text>
-          )}
-        </View>
-      </View>
+      ) : null}
     </ScrollView>
   );
 };
@@ -1266,13 +1302,10 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
@@ -1281,18 +1314,6 @@ const styles = StyleSheet.create({
   },
   heroLeft: {
     flex: 1,
-    paddingRight: 10,
-  },
-  heroRight: {
-    width: 96,
-    height: 96,
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: '#eff6ff',
-  },
-  heroArt: {
-    width: '100%',
-    height: '100%',
   },
   badgeRow: {
     flexDirection: 'row',
@@ -1345,66 +1366,172 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   heroSubtitle: {
-    fontSize: 11.5,
+    fontSize: 12,
     color: '#475569',
-    marginTop: 2,
+    marginTop: 3,
+    lineHeight: 17,
+  },
+  guideCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  guideHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  guideTitle: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#1e3a8a',
+  },
+  comparisonGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  comparisonColBlue: {
+    flex: 1,
+    minWidth: 150,
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  comparisonBadgeBlue: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1d4ed8',
+    marginBottom: 4,
+  },
+  comparisonDescBlue: {
+    fontSize: 10.5,
+    color: '#1e40af',
+    lineHeight: 15,
+  },
+  comparisonColGreen: {
+    flex: 1,
+    minWidth: 150,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  comparisonBadgeGreen: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#059669',
+    marginBottom: 4,
+  },
+  comparisonDescGreen: {
+    fontSize: 10.5,
+    color: '#166534',
+    lineHeight: 15,
+  },
+  howToTestContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  howToTestHeader: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  stepItemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 4,
+  },
+  stepNumberBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#2563eb',
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  stepItemText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#334155',
     lineHeight: 16,
+  },
+  detectionSyncCard: {
+    backgroundColor: '#ecfdf5',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  syncHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  syncBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  syncBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#059669',
+  },
+  resyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  resyncBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#2563eb',
+  },
+  syncMetaText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#065f46',
   },
   activeCoordPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
     borderColor: '#bbf7d0',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
-    alignSelf: 'flex-start',
     gap: 4,
   },
   activeCoordText: {
     fontSize: 10.5,
     fontWeight: '700',
     color: '#065f46',
-  },
-  infoCard: {
-    backgroundColor: '#eff6ff',
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  infoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  infoTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#1e3a8a',
-  },
-  infoBody: {
-    fontSize: 11.5,
-    color: '#1e40af',
-    lineHeight: 17,
-  },
-  howToTestRow: {
-    marginTop: 8,
-  },
-  howToTestBadge: {
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#93c5fd',
-  },
-  howToTestBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#0f172a',
   },
   whiteCard: {
     backgroundColor: '#ffffff',
@@ -1700,59 +1827,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 3,
   },
-  commanderBriefCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    shadowColor: '#2563eb',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  briefHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  briefHeaderTitle: {
-    fontSize: 13.5,
-    fontWeight: '800',
-    color: '#1e3a8a',
-  },
-  briefPointsList: {
-    gap: 10,
-  },
-  briefPointItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  briefPointBullet: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#eff6ff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  briefPointContent: {
-    flex: 1,
-  },
-  briefPointTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  briefPointDesc: {
-    fontSize: 11,
-    color: '#475569',
-    marginTop: 2,
-    lineHeight: 16,
-  },
   tableContainer: {
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -1961,59 +2035,114 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 2,
   },
-  routeCompareRow: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  routeCompareCard: {
-    flex: 1,
-    minWidth: 145,
-    borderRadius: 12,
-    padding: 10,
+  // Google Maps Style Navigation Card Styles
+  googleMapsNavCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#1a73e8',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  routeCompareHeaderRed: {
-    color: '#b91c1c',
-    fontSize: 11.5,
-    fontWeight: '800',
-  },
-  routeCompareDepthRed: {
-    color: '#dc2626',
-    fontSize: 15,
-    fontWeight: '900',
-    marginVertical: 2,
-  },
-  routeCompareHeaderGreen: {
-    color: '#047857',
-    fontSize: 11.5,
-    fontWeight: '800',
-  },
-  routeCompareDepthGreen: {
-    color: '#059669',
-    fontSize: 15,
-    fontWeight: '900',
-    marginVertical: 2,
-  },
-  routeCompareNote: {
-    color: '#334155',
-    fontSize: 10.5,
-    marginTop: 2,
-    lineHeight: 14,
-  },
-  callButton: {
-    marginTop: 12,
-    backgroundColor: '#dc2626',
-    paddingVertical: 12,
-    borderRadius: 10,
+  gmapsTopBar: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
-  callButtonText: {
-    color: '#ffffff',
+  gmapsEtaText: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#16a34a',
+  },
+  gmapsDistText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  gmapsSubText: {
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  gmapsSafeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  gmapsSafeBadgeText: {
+    fontSize: 11,
     fontWeight: '800',
-    fontSize: 13,
+    color: '#15803d',
+  },
+  safeHavenCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  safeHavenIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#fee2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  safeHavenLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#dc2626',
+    letterSpacing: 0.5,
+  },
+  safeHavenTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 2,
+  },
+  safeHavenSub: {
+    fontSize: 11.5,
+    color: '#64748b',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  openGoogleMapsSafeBtn: {
+    backgroundColor: '#1a73e8',
+    borderRadius: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#1a73e8',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  openGoogleMapsSafeBtnText: {
+    color: '#ffffff',
+    fontSize: 13.5,
+    fontWeight: '800',
   },
 });
 

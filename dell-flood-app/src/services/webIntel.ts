@@ -421,7 +421,12 @@ async function request<T>(
     } catch {
       payload = null;
     }
-    if (!res.ok) return { ok: false, error: { kind: 'http', status: res.status, message: httpMessage(res.status, payload) } };
+    if (!res.ok) {
+      if (res.status === 401) {
+        AsyncStorage.removeItem(TOKEN_KEY).catch(() => {});
+      }
+      return { ok: false, error: { kind: 'http', status: res.status, message: httpMessage(res.status, payload) } };
+    }
     const problem = opts.check ? opts.check(payload) : null;
     if (problem) return { ok: false, error: { kind: 'contract', message: problem } };
     return { ok: true, value: payload as T };

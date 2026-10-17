@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -130,56 +130,49 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
     }
   };
 
-  // P33: Photo Upload with Client-Side Compression (<=150KB)
+  const fileInputRef = useRef<any>(null);
+
+  // P33: Photo Upload with Reliable Web & Native Handling
   const handlePickPhoto = () => {
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-      input.onchange = (event: any) => {
-        const file = event?.target?.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (loadEvt) => {
-          const rawDataUrl = String(loadEvt.target?.result || '');
-          if (typeof Image !== 'undefined' && typeof document !== 'undefined') {
-            const img = new window.Image();
-            img.onload = () => {
-              const canvas = document.createElement('canvas');
-              const maxDim = 640;
-              let w = img.width;
-              let h = img.height;
-              if (w > maxDim || h > maxDim) {
-                if (w > h) {
-                  h = Math.round((h * maxDim) / w);
-                  w = maxDim;
-                } else {
-                  w = Math.round((w * maxDim) / h);
-                  h = maxDim;
-                }
-              }
-              canvas.width = w;
-              canvas.height = h;
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                ctx.drawImage(img, 0, 0, w, h);
-                const compressed = canvas.toDataURL('image/jpeg', 0.65);
-                setImageB64(compressed);
-              } else {
-                setImageB64(rawDataUrl);
-              }
+    if (Platform.OS === 'web') {
+      if (fileInputRef.current) {
+        fileInputRef.current.click();
+      } else if (typeof document !== 'undefined') {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = (e: any) => {
+          const file = e.target?.files?.[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (loadEvt) => {
+              const res = String(loadEvt.target?.result || '');
+              if (res) setImageB64(res);
             };
-            img.src = rawDataUrl;
-          } else {
-            setImageB64(rawDataUrl);
+            reader.readAsDataURL(file);
           }
         };
-        reader.readAsDataURL(file);
-      };
-      input.click();
+        input.click();
+      }
     } else {
-      // Mobile fallback / instant geo-tagged evidence photo
+      // Mobile fallback
       setImageB64(SAMPLE_FLOOD_PHOTO_B64);
+    }
+  };
+
+  const handleFileChange = (e: any) => {
+    try {
+      const file = e.target?.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (loadEvt) => {
+        const res = String(loadEvt.target?.result || '');
+        if (res) setImageB64(res);
+      };
+      reader.readAsDataURL(file);
+      if (e.target) e.target.value = '';
+    } catch (err) {
+      console.warn('[ReportForm] File read error:', err);
     }
   };
 
@@ -407,6 +400,15 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
           {language === 'hi' ? '📷 बाढ़ की फोटो अपलोड करें (वैकल्पिक)' : '📷 Flood Photo Evidence (Camera / Gallery)'}
         </Text>
         <View style={styles.photoUploadContainer}>
+          {Platform.OS === 'web' && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+          )}
           <View style={styles.photoButtonsRow}>
             <TouchableOpacity style={styles.photoUploadBtn} onPress={handlePickPhoto}>
               <Camera size={15} color="#ffffff" style={{ marginRight: 6 }} />

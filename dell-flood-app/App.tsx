@@ -1822,7 +1822,9 @@ export default function App() {
           <NowcastPanel
             lat={activeLat}
             lon={activeLon}
+            locationName={lastResult ? `${activeLat.toFixed(2)}°N, ${activeLon.toFixed(2)}°E Scan Zone` : undefined}
             language={appLanguage}
+            lastDetectionResult={lastResult}
             lastDetectionNowcast={(lastResult as any)?.urnn_nowcast}
           />
         )}

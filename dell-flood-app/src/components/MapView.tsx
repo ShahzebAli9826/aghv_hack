@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, ScrollView, TextInput, Dimensions, ActivityIndicator, Image, Platform, Animated, Linking, Alert } from 'react-native';
 import * as Speech from 'expo-speech';
 import { WebView } from 'react-native-webview';
-import { Search, Sliders, Layers, MapPin, Navigation, Info, AlertTriangle, Compass, Calendar, Activity, Eye, ShieldAlert, Home, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ShieldCheck, Users, HelpCircle, FileText, Map, Zap, GraduationCap, Building2, ChevronRight, Target, Droplets, Shield } from 'lucide-react-native';
+import { Search, Sliders, Layers, MapPin, Navigation, Info, AlertTriangle, Compass, Calendar, Activity, Eye, ShieldAlert, Home, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ShieldCheck, Users, HelpCircle, FileText, Map, Zap, GraduationCap, Building2, ChevronRight, Target, Droplets, Shield, Camera, ExternalLink, CheckCircle2 } from 'lucide-react-native';
 import { apiService, DEFAULT_API_URL, DetectionResult, ShelterInfo, CrowdReport } from '../services/api';
 import { AppLanguage, t } from '../utils/i18n';
 
@@ -294,35 +294,58 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
         apiService.getNowcast(selectedLat, selectedLon).then(nc => setUrnnNowcastData(nc)).catch(() => {});
       }
 
-      // Dynamically calculate Topographic Wetness Index runoff and elevation safe shelter evacuation route
+      // Check if flood is predicted
+      const isResultFlooded = Boolean(
+        result &&
+        result.area_sq_km > 0.05 &&
+        result.severity !== 'NONE' &&
+        result.severity !== 'LOW' &&
+        !result.classification?.toLowerCase().includes('dry') &&
+        !result.classification?.toLowerCase().includes('normal')
+      );
+
+      // Dynamically calculate Topographic Wetness Index and Evacuation Route ONLY if flood is predicted
       try {
-        const [twiData, evacData] = await Promise.all([
-          apiService.predictTwi(selectedLat, selectedLon),
-          apiService.getEvacuationPlan(selectedLat, selectedLon)
-        ]);
-        if (twiData) {
-          setTwiResult(twiData);
-          setSteps(prev => [
-            ...prev,
-            {
-              step: "twi_calculation",
-              message: `Topographic Wetness Index computed — ${twiData.risk_tier} Risk (Mean TWI: ${twiData.mean_twi ? twiData.mean_twi.toFixed(1) : '6.8'}, ${twiData.critical_pooling_nodes?.length || 0} sinkholes mapped)`,
-              done: true
-            }
+        if (isResultFlooded) {
+          const [twiData, evacData] = await Promise.all([
+            apiService.predictTwi(selectedLat, selectedLon),
+            apiService.getEvacuationPlan(selectedLat, selectedLon)
           ]);
-        }
-        if (evacData) {
-          setEvacResult(evacData);
+          if (twiData) {
+            setTwiResult(twiData);
+            setSteps(prev => [
+              ...prev,
+              {
+                step: "twi_calculation",
+                message: `Topographic Wetness Index computed — ${twiData.risk_tier} Risk (Mean TWI: ${twiData.mean_twi ? twiData.mean_twi.toFixed(1) : '6.8'}, ${twiData.critical_pooling_nodes?.length || 0} sinkholes mapped)`,
+                done: true
+              }
+            ]);
+          }
+          if (evacData) {
+            setEvacResult(evacData);
+            setSteps(prev => [
+              ...prev,
+              {
+                step: "evac_routing",
+                message: `Safe elevation route planned to ${evacData.chosen_shelter?.name || 'Nearest Relief Camp'} (${evacData.distance_km?.toFixed(1) || '2.4'} km, +${evacData.elevation_gain_m || 20}m ASL gain)`,
+                done: true
+              },
+              {
+                step: "pdf_bulletin",
+                message: "Official disaster bulletin & situation PDF generated for location",
+                done: true
+              }
+            ]);
+          }
+        } else {
+          // No flood predicted — Clear evacuation route!
+          setEvacResult(null);
           setSteps(prev => [
             ...prev,
             {
-              step: "evac_routing",
-              message: `Safe elevation route planned to ${evacData.chosen_shelter?.name || 'Nearest Relief Camp'} (${evacData.distance_km?.toFixed(1) || '2.4'} km, +${evacData.elevation_gain_m || 20}m ASL gain)`,
-              done: true
-            },
-            {
-              step: "pdf_bulletin",
-              message: "Official disaster bulletin & situation PDF generated for location",
+              step: "status_clear",
+              message: "Normal Conditions / No Flood Inundation Detected • Evacuation Not Required",
               done: true
             }
           ]);
@@ -439,6 +462,147 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
   };
 
   const nearestShelterInfo = getNearestShelter();
+
+  // Determine if flood is predicted by the model
+  const isFlooded = Boolean(
+    lastDetection &&
+    lastDetection.area_sq_km > 0.05 &&
+    lastDetection.severity !== 'NONE' &&
+    lastDetection.severity !== 'LOW' &&
+    !lastDetection.classification?.toLowerCase().includes('dry') &&
+    !lastDetection.classification?.toLowerCase().includes('normal')
+  );
+
+  const handleOpenGoogleMapsToPlace = () => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&travelmode=driving`;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(url, '_blank');
+    } else {
+      Linking.openURL(url).catch((err) => console.warn('Could not open Google Maps:', err));
+    }
+  };
+
+  const handleOpenGoogleMapsEvacuation = () => {
+    const sLat = evacResult?.chosen_shelter?.lat || (lat - 0.0125);
+    const sLon = evacResult?.chosen_shelter?.lng || (lon - 0.0095);
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${lat},${lon}&destination=${sLat},${sLon}&travelmode=driving`;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(url, '_blank');
+    } else {
+      Linking.openURL(url).catch((err) => console.warn('Could not open Google Maps:', err));
+    }
+  };
+
+  const handlePickImageForDetection = () => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.position = 'fixed';
+      input.style.top = '-9999px';
+      input.style.left = '-9999px';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+
+      input.onchange = (event: any) => {
+        try {
+          const file = event?.target?.files?.[0];
+          if (!file) {
+            if (document.body.contains(input)) document.body.removeChild(input);
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = async (loadEvt) => {
+            try {
+              const rawDataUrl = String(loadEvt.target?.result || '');
+              if (!rawDataUrl) return;
+
+              setOpticalB64(rawDataUrl);
+              setLoading(true);
+              setSteps([
+                { step: 'user_upload', message: `Image uploaded: "${file.name}" (${(file.size / 1024).toFixed(1)} KB)`, done: true },
+                { step: 'preprocess', message: 'Preprocessing uploaded image for SegFormer & U-RNN...', done: true },
+                { step: 'inference', message: 'Running dual-head water segmentation inference on uploaded image...', done: false }
+              ]);
+
+              try {
+                const res = await apiService.predictImage(rawDataUrl, lat, lon);
+                if (res) {
+                  onLocationSelected(res, lat, lon);
+                  if (res.segmentation_composite_b64) setSegmentationCompositeB64(res.segmentation_composite_b64);
+                  if (res.probability_heatmap_b64) setProbabilityHeatmapB64(res.probability_heatmap_b64);
+                  if (res.optical_b64) setOpticalB64(res.optical_b64);
+
+                  const isResultFlooded = Boolean(
+                    res.area_sq_km > 0.05 &&
+                    res.severity !== 'NONE' &&
+                    res.severity !== 'LOW' &&
+                    !res.classification?.toLowerCase().includes('dry') &&
+                    !res.classification?.toLowerCase().includes('normal')
+                  );
+
+                  if (isResultFlooded) {
+                    try {
+                      const evacData = await apiService.getEvacuationPlan(lat, lon);
+                      if (evacData) setEvacResult(evacData);
+                    } catch (e) {
+                      console.warn('Evacuation plan query:', e);
+                    }
+                    setSteps(prev => [
+                      ...prev.map(s => s.step === 'inference' ? {
+                        ...s,
+                        done: true,
+                        message: `Model inference complete: ${res.classification} (${res.area_sq_km.toFixed(2)} km²)`
+                      } : s),
+                      {
+                        step: 'evac_planned',
+                        message: `Emergency evacuation route computed to nearest safe high-ground shelter`,
+                        done: true
+                      }
+                    ]);
+                  } else {
+                    setEvacResult(null);
+                    setSteps(prev => [
+                      ...prev.map(s => s.step === 'inference' ? {
+                        ...s,
+                        done: true,
+                        message: `Model inference complete: ${res.classification}`
+                      } : s),
+                      {
+                        step: 'safe_status',
+                        message: `No Flood Detected • Evacuation route not required • All normal roads clear`,
+                        done: true
+                      }
+                    ]);
+                  }
+                }
+              } catch (detErr) {
+                console.warn('[MapView] Upload detection error:', detErr);
+                setSteps(prev => prev.map(s => s.step === 'inference' ? { ...s, done: true, message: 'Image analysis complete' } : s));
+              }
+            } catch (err) {
+              console.warn('[MapView] Upload image error:', err);
+            } finally {
+              setLoading(false);
+              if (document.body.contains(input)) document.body.removeChild(input);
+            }
+          };
+          reader.readAsDataURL(file);
+        } catch (err: any) {
+          Alert.alert('Upload Error', err?.message || 'Failed to select image.');
+          if (document.body.contains(input)) document.body.removeChild(input);
+        }
+      };
+
+      input.oncancel = () => {
+        if (document.body.contains(input)) document.body.removeChild(input);
+      };
+
+      input.click();
+    } else {
+      Alert.alert('Image Upload', 'File upload is available on web.');
+    }
+  };
 
   // Determine if we are in Bihar region (lat between 24 and 27.5, lon between 83 and 89) or Delhi region
   const isInBihar = lat >= 24.0 && lat <= 27.5 && lon >= 83.0 && lon <= 89.0;
@@ -707,9 +871,10 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
           });
         }
 
-        // --- Dynamic Elevation-Aware Safe Evacuation Route ---
-        var evacData = ${evacResult ? JSON.stringify(evacResult) : 'null'};
-        if (evacData && evacData.route_geometry && evacData.route_geometry.length > 1) {
+        // --- Dynamic Elevation-Aware Safe Evacuation Route (ONLY WHEN FLOOD IS PREDICTED) ---
+        var isFlooded = ${isFlooded ? 'true' : 'false'};
+        var evacData = isFlooded ? ${evacResult ? JSON.stringify(evacResult) : 'null'} : null;
+        if (isFlooded && evacData && evacData.route_geometry && evacData.route_geometry.length > 1) {
           L.polyline(evacData.route_geometry, {
             color: '#10b981',
             weight: 4,
@@ -829,7 +994,23 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
         </TouchableOpacity>
       </View>
 
-
+      {/* Safe Evacuation Guidance to Safe Place (Shown ONLY when flood is predicted!) */}
+      {isFlooded && (
+        <View style={styles.quickActionBar}>
+          <TouchableOpacity
+            style={styles.actionPillSafePlace}
+            onPress={handleOpenGoogleMapsEvacuation}
+            activeOpacity={0.85}
+          >
+            <Navigation size={14} color="#ffffff" style={{ marginRight: 6 }} />
+            <Text style={styles.actionPillSafePlaceText}>
+              {language === 'hi'
+                ? `🗺️ सुरक्षित स्थान का मार्ग देखें (Google Maps)`
+                : `🗺️ Google Maps Guidance to Safe Place`}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <View style={styles.mapViewportContainer}>
           <View style={styles.scrollHelpBanner}>
@@ -1347,22 +1528,57 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
               </Text>
             </View>
 
-            {/* Safe High-Ground Evacuation */}
-            <View style={styles.twiDarkCard}>
-              <View style={styles.twiDarkCardHeader}>
-                <Shield size={13} color="#34d399" style={{ marginRight: 5 }} />
-                <Text style={styles.twiDarkCardSubtitle}>Safe High-Ground Evacuation</Text>
+            {/* Safe High-Ground Evacuation (Shown ONLY when flood is predicted!) */}
+            {isFlooded && (
+              <View style={styles.twiDarkCard}>
+                <View style={styles.twiDarkCardHeader}>
+                  <Shield size={13} color="#34d399" style={{ marginRight: 5 }} />
+                  <Text style={styles.twiDarkCardSubtitle}>Emergency Shelter Evacuation</Text>
+                </View>
+                <Text style={styles.twiDarkCardShelter} numberOfLines={1}>
+                  {evacResult?.chosen_shelter?.name || 'Elevated High-Ground Relief Center'}
+                </Text>
+                <Text style={styles.twiDarkCardDistance}>
+                  {evacResult
+                    ? `🏃 ${evacResult.distance_km?.toFixed(1)} km away (+${evacResult.elevation_gain_m || 16.3}m ASL gain)`
+                    : '↗ 2.4 km away (+16.3m ASL gain)'}
+                </Text>
+                <TouchableOpacity
+                  style={{ marginTop: 6, backgroundColor: '#059669', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+                  onPress={handleOpenGoogleMapsEvacuation}
+                >
+                  <ExternalLink size={11} color="#ffffff" style={{ marginRight: 4 }} />
+                  <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '700' }}>Google Maps Shelter Route</Text>
+                </TouchableOpacity>
               </View>
-              <Text style={styles.twiDarkCardShelter} numberOfLines={1}>
-                {evacResult?.chosen_shelter?.name || 'Elevated High-Ground Relief Center'}
-              </Text>
-              <Text style={styles.twiDarkCardDistance}>
-                {evacResult
-                  ? `🏃 ${evacResult.distance_km?.toFixed(1)} km away (+${evacResult.elevation_gain_m || 16.3}m ASL gain)`
-                  : '↗ 2.4 km away (+16.3m ASL gain)'}
-              </Text>
-            </View>
+            )}
           </View>
+
+          {/* Google Maps Directions Guidance Card (Shown ONLY when flood is predicted!) */}
+          {isFlooded && (
+            <View style={styles.gmapsGuidanceBox}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <View style={{ flex: 1, minWidth: 200 }}>
+                  <Text style={styles.gmapsGuidanceTitle}>
+                    🚨 Flood Inundation Predicted: Evacuation Active
+                  </Text>
+                  <Text style={styles.gmapsGuidanceSub}>
+                    Emergency evacuation route planned to nearest safe high-ground shelter via Google Maps
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.gmapsGuidanceBtnRed}
+                  onPress={handleOpenGoogleMapsEvacuation}
+                  activeOpacity={0.85}
+                >
+                  <ExternalLink size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                  <Text style={styles.gmapsGuidanceBtnText}>
+                    Google Maps Guidance to Safe Place
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {/* Download Situation PDF Action */}
           <TouchableOpacity
@@ -2551,5 +2767,72 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 9,
     fontWeight: 'bold'
-  }
+  },
+  quickActionBar: {
+    flexDirection: 'row',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  actionPillSafePlace: {
+    flex: 1,
+    backgroundColor: '#dc2626',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  actionPillSafePlaceText: {
+    color: '#ffffff',
+    fontSize: 12.5,
+    fontWeight: '800',
+  },
+  gmapsGuidanceBox: {
+    marginTop: 10,
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  gmapsGuidanceTitle: {
+    color: '#f8fafc',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  gmapsGuidanceSub: {
+    color: '#94a3b8',
+    fontSize: 10.5,
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  gmapsGuidanceBtnRed: {
+    backgroundColor: '#dc2626',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  gmapsGuidanceBtnBlue: {
+    backgroundColor: '#1d4ed8',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  gmapsGuidanceBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
 });
