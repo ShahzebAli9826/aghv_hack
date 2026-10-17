@@ -14,12 +14,21 @@
             "usesCleartextTraffic": true
           }
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you upload ground evidence of flooding.",
+          "cameraPermission": "The app uses your camera to let you take photos of flood conditions."
+        }
       ]
     ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "This application uses your GPS location to report local flooding and map rescue shelters."
+        "NSLocationWhenInUseUsageDescription": "This application uses your GPS location to report local flooding and map rescue shelters.",
+        "NSCameraUsageDescription": "This app uses your camera to capture ground photos of flood conditions.",
+        "NSPhotoLibraryUsageDescription": "This app accesses your photos to attach flood condition evidence."
       }
     },
     "android": {
@@ -32,7 +41,11 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES"
       ],
       "package": "com.rajatrawal06.aegis",
       "usesCleartextTraffic": true

@@ -11,8 +11,9 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { AlertCircle, CheckCircle2, Navigation, Send, Check, Camera, Trash2 } from 'lucide-react-native';
+import { AlertCircle, CheckCircle2, Navigation, Send, Check, Camera, Images, Trash2 } from 'lucide-react-native';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 import { apiService } from '../services/api';
 import { AppLanguage, t } from '../utils/i18n';
 
@@ -36,33 +37,6 @@ const CATEGORIES_HI: Record<string, string> = {
   'Food/Water Shortage': 'भोजन/पानी की कमी',
 };
 
-// Compact sample flood evidence SVG/PNG data URL (<2KB) for instant 1-click demo verification
-const SAMPLE_FLOOD_PHOTO_B64 =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">
-      <defs>
-        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#1e293b"/>
-          <stop offset="100%" stop-color="#475569"/>
-        </linearGradient>
-        <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#0284c7"/>
-          <stop offset="100%" stop-color="#0369a1"/>
-        </linearGradient>
-      </defs>
-      <rect width="320" height="115" fill="url(#sky)"/>
-      <rect x="40" y="55" width="75" height="65" fill="#cbd5e1" stroke="#334155" stroke-width="2"/>
-      <rect x="55" y="70" width="18" height="18" fill="#0f172a"/>
-      <rect x="85" y="70" width="18" height="18" fill="#0f172a"/>
-      <rect x="155" y="45" width="110" height="75" fill="#94a3b8" stroke="#334155" stroke-width="2"/>
-      <rect y="110" width="320" height="90" fill="url(#water)" opacity="0.92"/>
-      <path d="M 10 130 Q 45 120 80 130 T 150 130 T 220 130 T 300 130" stroke="#7dd3fc" stroke-width="3" fill="none"/>
-      <path d="M 20 155 Q 65 145 110 155 T 200 155 T 290 155" stroke="#bae6fd" stroke-width="2.5" fill="none"/>
-      <rect x="10" y="10" width="195" height="24" rx="5" fill="#dc2626"/>
-      <text x="18" y="26" fill="#ffffff" font-family="Arial" font-weight="bold" font-size="11">GEO-TAGGED FLOOD EVIDENCE (0.65m)</text>
-    </svg>`
-  );
 
 export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, language = 'en' }) => {
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
@@ -77,6 +51,8 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [success, setSuccess] = useState<boolean>(false);
   const [awsTriageReceipt, setAwsTriageReceipt] = useState<any>(null);
+  const [loadingImage, setLoadingImage] = useState<boolean>(false);
+  const cameraInputRef = useRef<any>(null);
 
   const handleLookupPlace = async () => {
     const query = placeName.trim();
@@ -132,8 +108,143 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
 
   const fileInputRef = useRef<any>(null);
 
-  // P33: Photo Upload with Reliable Web & Native Handling
-  const handlePickPhoto = () => {
+  const processDataUrl = async (dataUrl: string): Promise<string> => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return dataUrl;
+    return new Promise((resolve) => {
+      try {
+        const img = new (window as any).Image();
+        img.onload = () => {
+          const maxDim = 1200;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.72);
+            resolve(compressed);
+            return;
+          }
+          resolve(dataUrl);
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+      } catch {
+        resolve(dataUrl);
+      }
+    });
+  };
+
+  const handleFileChange = async (e: any) => {
+    try {
+      const file = e.target?.files?.[0];
+      if (!file) return;
+      setLoadingImage(true);
+      const reader = new FileReader();
+      reader.onload = async (loadEvt) => {
+        try {
+          const rawResult = String(loadEvt.target?.result || '');
+          if (rawResult) {
+            const optimized = await processDataUrl(rawResult);
+            setImageB64(optimized);
+          }
+        } finally {
+          setLoadingImage(false);
+        }
+      };
+      reader.onerror = () => {
+        setLoadingImage(false);
+        const errMsg = 'Failed to read image file.';
+        if (Platform.OS === 'web') window.alert(errMsg);
+        else Alert.alert('File Error', errMsg);
+      };
+      reader.readAsDataURL(file);
+      if (e.target) e.target.value = '';
+    } catch (err) {
+      setLoadingImage(false);
+      console.warn('[ReportForm] File read error:', err);
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    if (Platform.OS === 'web') {
+      if (cameraInputRef.current) {
+        cameraInputRef.current.click();
+      } else if (fileInputRef.current) {
+        fileInputRef.current.click();
+      }
+      return;
+    }
+
+    try {
+      setLoadingImage(true);
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        setLoadingImage(false);
+        Alert.alert(
+          language === 'hi' ? 'अनुमति आवश्यक' : 'Permission Required',
+          language === 'hi'
+            ? 'बाढ़ की लाइव फोटो खींचने के लिए कृपया कैमरा एक्सेस की अनुमति दें।'
+            : 'Camera permission is required to capture flood photos.'
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.65,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.base64) {
+          const mime = asset.mimeType || 'image/jpeg';
+          const fullB64 = asset.base64.startsWith('data:')
+            ? asset.base64
+            : `data:${mime};base64,${asset.base64}`;
+          setImageB64(fullB64);
+        } else if (asset.uri) {
+          try {
+            const res = await fetch(asset.uri);
+            const blob = await res.blob();
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              if (reader.result) setImageB64(String(reader.result));
+            };
+            reader.readAsDataURL(blob);
+          } catch {
+            setImageB64(asset.uri);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('[ReportForm] Camera capture error:', err);
+      Alert.alert(
+        language === 'hi' ? 'कैमरा त्रुटि' : 'Camera Error',
+        language === 'hi'
+          ? 'कैमरा शुरू करने में समस्या हुई। आप गैलरी से भी फोटो चुन सकते हैं।'
+          : 'Unable to start camera. You can also pick a photo from your gallery.'
+      );
+    } finally {
+      setLoadingImage(false);
+    }
+  };
+
+  const handlePickFromGallery = async () => {
     if (Platform.OS === 'web') {
       if (fileInputRef.current) {
         fileInputRef.current.click();
@@ -141,38 +252,66 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = 'image/*';
-        input.onchange = (e: any) => {
-          const file = e.target?.files?.[0];
-          if (file) {
-            const reader = new FileReader();
-            reader.onload = (loadEvt) => {
-              const res = String(loadEvt.target?.result || '');
-              if (res) setImageB64(res);
-            };
-            reader.readAsDataURL(file);
-          }
-        };
+        input.onchange = handleFileChange;
         input.click();
       }
-    } else {
-      // Mobile fallback
-      setImageB64(SAMPLE_FLOOD_PHOTO_B64);
+      return;
     }
-  };
 
-  const handleFileChange = (e: any) => {
     try {
-      const file = e.target?.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (loadEvt) => {
-        const res = String(loadEvt.target?.result || '');
-        if (res) setImageB64(res);
-      };
-      reader.readAsDataURL(file);
-      if (e.target) e.target.value = '';
-    } catch (err) {
-      console.warn('[ReportForm] File read error:', err);
+      setLoadingImage(true);
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        setLoadingImage(false);
+        Alert.alert(
+          language === 'hi' ? 'अनुमति आवश्यक' : 'Permission Required',
+          language === 'hi'
+            ? 'फोटो चुनने के लिए कृपया गैलरी एक्सेस की अनुमति दें।'
+            : 'Gallery permission is required to attach disaster photos.'
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.65,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.base64) {
+          const mime = asset.mimeType || 'image/jpeg';
+          const fullB64 = asset.base64.startsWith('data:')
+            ? asset.base64
+            : `data:${mime};base64,${asset.base64}`;
+          setImageB64(fullB64);
+        } else if (asset.uri) {
+          try {
+            const res = await fetch(asset.uri);
+            const blob = await res.blob();
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              if (reader.result) setImageB64(String(reader.result));
+            };
+            reader.readAsDataURL(blob);
+          } catch {
+            setImageB64(asset.uri);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('[ReportForm] Gallery error:', err);
+      Alert.alert(
+        language === 'hi' ? 'गैलरी त्रुटि' : 'Gallery Error',
+        language === 'hi'
+          ? 'गैलरी से फोटो चुनने में असमर्थ।'
+          : 'Unable to select photo from gallery.'
+      );
+    } finally {
+      setLoadingImage(false);
     }
   };
 
@@ -395,54 +534,79 @@ export const ReportForm: React.FC<ReportFormProps> = ({ username, onReported, la
           </View>
         </View>
 
-        {/* P33: Flood Evidence Photo Upload Section */}
+        {/* Flood Evidence Photo Upload Section */}
         <Text style={styles.label}>
           {language === 'hi' ? '📷 बाढ़ की फोटो अपलोड करें (वैकल्पिक)' : '📷 Flood Photo Evidence (Camera / Gallery)'}
         </Text>
         <View style={styles.photoUploadContainer}>
           {Platform.OS === 'web' && (
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-            />
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+            </>
           )}
-          <View style={styles.photoButtonsRow}>
-            <TouchableOpacity style={styles.photoUploadBtn} onPress={handlePickPhoto}>
-              <Camera size={15} color="#ffffff" style={{ marginRight: 6 }} />
-              <Text style={styles.photoUploadBtnText}>
-                {imageB64 ? t(language, 'change_photo') : t(language, 'upload_photo')}
-              </Text>
-            </TouchableOpacity>
 
-            {!imageB64 && (
-              <TouchableOpacity
-                style={styles.samplePhotoBtn}
-                onPress={() => setImageB64(SAMPLE_FLOOD_PHOTO_B64)}
-              >
-                <Text style={styles.samplePhotoBtnText}>
-                  {language === 'hi' ? '+ डेमो फोटो जोड़ें' : '+ Demo Flood Photo'}
+          {loadingImage ? (
+            <View style={styles.photoLoadingBox}>
+              <ActivityIndicator size="small" color="#0284c7" />
+              <Text style={styles.photoLoadingText}>
+                {language === 'hi' ? 'फोटो संसाधित की जा रही है...' : 'Processing photo...'}
+              </Text>
+            </View>
+          ) : !imageB64 ? (
+            <View style={styles.photoButtonsRow}>
+              <TouchableOpacity style={styles.photoActionBtn} onPress={handleTakePhoto}>
+                <Camera size={15} color="#ffffff" style={{ marginRight: 6 }} />
+                <Text style={styles.photoActionBtnText}>
+                  {language === 'hi' ? 'फोटो खींचें' : 'Take Photo'}
                 </Text>
               </TouchableOpacity>
-            )}
-          </View>
 
-          {!!imageB64 && (
+              <TouchableOpacity style={[styles.photoActionBtn, styles.galleryBtn]} onPress={handlePickFromGallery}>
+                <Images size={15} color="#0369a1" style={{ marginRight: 6 }} />
+                <Text style={[styles.photoActionBtnText, styles.galleryBtnText]}>
+                  {language === 'hi' ? 'गैलरी से चुनें' : 'Choose from Gallery'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
             <View style={styles.photoPreviewBox}>
               <Image source={{ uri: imageB64 }} style={styles.photoThumbnail} resizeMode="cover" />
               <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.photoBadgeText}>{t(language, 'photo_attached_badge')}</Text>
+                <Text style={styles.photoBadgeText}>
+                  {language === 'hi' ? '✓ वास्तविक फोटो संलग्न' : '✓ Live Flood Photo Attached'}
+                </Text>
                 <Text style={styles.photoSubText}>
                   {language === 'hi'
                     ? 'अधिकारियों के ट्रायज डैशबोर्ड और मैप पिन में दिखाई देगा (+6% मॉडल विश्वास)'
                     : 'Visible in Official Triage Queue & Map Pin (+6% corroboration boost)'}
                 </Text>
-                <TouchableOpacity style={styles.removePhotoBtn} onPress={() => setImageB64('')}>
-                  <Trash2 size={12} color="#dc2626" style={{ marginRight: 4 }} />
-                  <Text style={styles.removePhotoText}>{t(language, 'remove_photo')}</Text>
-                </TouchableOpacity>
+                <View style={styles.photoActionsRow}>
+                  <TouchableOpacity style={styles.changePhotoBtn} onPress={handlePickFromGallery}>
+                    <Text style={styles.changePhotoText}>
+                      {language === 'hi' ? 'फोटो बदलें' : 'Change Photo'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.removePhotoBtn} onPress={() => setImageB64('')}>
+                    <Trash2 size={12} color="#dc2626" style={{ marginRight: 4 }} />
+                    <Text style={styles.removePhotoText}>
+                      {language === 'hi' ? 'हटाएं' : 'Remove'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           )}
@@ -605,32 +769,35 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   photoButtonsRow: { flexDirection: 'row', gap: 8 },
-  photoUploadBtn: {
+  photoActionBtn: {
     flex: 1,
     backgroundColor: '#0284c7',
     borderRadius: 8,
-    height: 36,
+    height: 38,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
   },
-  photoUploadBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
-  samplePhotoBtn: {
-    backgroundColor: '#e0f2fe',
+  photoActionBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
+  galleryBtn: {
+    backgroundColor: '#f0f9ff',
     borderWidth: 1,
     borderColor: '#38bdf8',
-    borderRadius: 8,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 10,
   },
-  samplePhotoBtnText: { color: '#0369a1', fontSize: 11, fontWeight: '700' },
+  galleryBtnText: { color: '#0369a1' },
+  photoLoadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    gap: 8,
+  },
+  photoLoadingText: { color: '#0369a1', fontSize: 11, fontWeight: '600' },
   photoPreviewBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 6,
     backgroundColor: '#ffffff',
     padding: 8,
     borderRadius: 8,
@@ -640,7 +807,10 @@ const styles = StyleSheet.create({
   photoThumbnail: { width: 76, height: 58, borderRadius: 6, backgroundColor: '#0f172a' },
   photoBadgeText: { color: '#0369a1', fontSize: 11, fontWeight: '800' },
   photoSubText: { color: '#64748b', fontSize: 10, marginTop: 2 },
-  removePhotoBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  photoActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 5 },
+  changePhotoBtn: { paddingVertical: 2 },
+  changePhotoText: { color: '#0284c7', fontSize: 10, fontWeight: '700' },
+  removePhotoBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 2 },
   removePhotoText: { color: '#dc2626', fontSize: 10, fontWeight: '700' },
   optionsContainer: {
     flexDirection: 'row',
