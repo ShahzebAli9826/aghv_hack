@@ -1131,6 +1131,7 @@ export default function App() {
             initialLat={activeLat}
             initialLon={activeLon}
             language={appLanguage}
+            role={role}
           />
         )}
 
@@ -1140,7 +1141,7 @@ export default function App() {
         )}
 
         {activeTab === 'report' && (
-          role === 'citizen' ? (
+          role !== 'official' ? (
             <ScrollView 
               style={styles.dashboardContainer} 
               contentContainerStyle={{ paddingBottom: 60 }}

@@ -17,6 +17,7 @@ interface MapViewProps {
   initialLat?: number;
   initialLon?: number;
   language?: AppLanguage;
+  role?: string;
 }
 
 // Pre-defined Village/District Hazard Zones with distinct flood probabilities
@@ -42,7 +43,7 @@ const CITY_GEOCODING: Record<string, { lat: number; lon: number }> = {
   "kolkata": { lat: 22.5726, lon: 88.3639 }
 };
 
-export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetection, initialLat = 22.0, initialLon = 79.0, language = 'en' }) => {
+export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetection, initialLat = 22.0, initialLon = 79.0, language = 'en', role = 'citizen' }) => {
   const [lat, setLat] = useState<number>(initialLat);
   const [lon, setLon] = useState<number>(initialLon);
   const iframeRef = React.useRef<any>(null);
@@ -1097,7 +1098,9 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
             )}
             {!loading && steps.length > 0 && !steps.some(s => s.step === 'error') && (
               <View style={styles.resultReadyBanner}>
-                <Text style={styles.resultReadyText}>{t(language, 'pipelineReadyBanner')}</Text>
+                <Text style={styles.resultReadyText}>
+                {role === 'official' ? t(language, 'pipelineReadyBanner') : (language === 'hi' ? '⚡ उपग्रह बाढ़ जोखिम विश्लेषण तैयार ⚡' : '⚡ SATELLITE FLOOD HAZARD SCAN READY ⚡')}
+              </Text>
               </View>
             )}
           </View>
@@ -1109,7 +1112,9 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
         <View style={styles.panelCard}>
           <View style={styles.cardHeader}>
             <Layers size={18} color="#2563eb" style={{ marginRight: 6 }} />
-            <Text style={styles.cardTitle}>Satellite Image Acquisition & 4D U-RNN Nowcast</Text>
+            <Text style={styles.cardTitle}>
+              {role === 'official' ? 'Satellite Image Acquisition & 4D U-RNN Nowcast' : (language === 'hi' ? 'उपग्रह अवलोकन और बाढ़ जोखिम विश्लेषण' : 'Satellite Earth Observation & Hazard Detection')}
+            </Text>
             <View style={{ marginLeft: 'auto', backgroundColor: '#e0f2fe', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
               <Text style={{ fontSize: 11, fontWeight: '700', color: '#0284c7' }}>☁️ {cloudCover}% Cloud Cover</Text>
             </View>
@@ -1195,8 +1200,8 @@ export const MapView: React.FC<MapViewProps> = ({ onLocationSelected, lastDetect
               </Text>
             </View>
 
-            {/* Panel 4: U-RNN 4D Continuous Water-Depth Nowcast (P31) */}
-            {urnnNowcastData?.horizons && (
+            {/* Panel 4: U-RNN 4D Continuous Water-Depth Nowcast (P31) - EXCLUSIVE TO OFFICIALS */}
+            {role === 'official' && urnnNowcastData?.horizons && (
               <View style={[styles.imagePanel, { borderColor: '#bfdbfe', backgroundColor: '#f8fafc' }]}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 4 }}>
                   <Text style={[styles.imagePanelLabel, { color: '#1e40af', marginBottom: 0 }]}>
