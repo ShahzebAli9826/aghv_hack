@@ -1,0 +1,28 @@
+{
+  "_comment": "MOCK replay fixture. Train numbers and disruptions are illustrative, not real NTES data.",
+  "run": {
+    "run_id": "mock_run_ntes_0001",
+    "status": "COMPLETED",
+    "goal": "(replay)",
+    "created_at": "{{ts:-25m}}",
+    "started_at": "{{ts:-25m}}",
+    "finished_at": "{{ts:-22m}}",
+    "num_of_steps": 11,
+    "result": {
+      "status": "success",
+      "trains": [
+        {
+          "train_number": "00000",
+          "train_name": "MOCK SIWAN EXPRESS",
+          "disruption": "diverted",
+          "affected_stations": "Siwan Jn",
+          "date": "{{ts:+0h:dmy}}",
+          "reason": "waterlogging (mock)"
+        }
+      ]
+    },
+    "error": null,
+    "streaming_url": null,
+    "steps": []
+  }
+}

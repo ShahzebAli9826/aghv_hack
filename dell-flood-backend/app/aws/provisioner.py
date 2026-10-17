@@ -31,7 +31,7 @@ class AWSFreeTierProvisioner:
     When no AWS credentials are present, it safely returns a zero-error simulation blueprint.
     """
 
-    def provision_all(self) -> Dict[str, Any]:
+    def provision_all(self, dry_run: bool = False) -> Dict[str, Any]:
         load_dotenv(override=True)
         region = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
         bucket_name = os.getenv("AWS_S3_BUCKET", "aegis-disaster-vault")
@@ -59,6 +59,20 @@ class AWSFreeTierProvisioner:
                     "sns_topic": {"name": "Aegis-Flash-Flood-Alerts", "mode": "SIMULATED_TOPIC"},
                     "sqs_queue": {"name": "Aegis-SOS-Triage-Queue.fifo", "mode": "IN_MEMORY_FIFO"},
                     "ssm_parameters": {"path": "/aegis/prod/*", "count": 5, "mode": "IN_MEMORY_STORE"},
+                },
+            }
+
+        if dry_run:
+            return {
+                "status": "DRY_RUN_NOTHING_CREATED",
+                "aws_credentials_detected": True,
+                "region": region,
+                "would_create_or_verify": {
+                    "s3_bucket": bucket_name,
+                    "dynamodb_tables": [reports_table, shelters_table, audit_table],
+                    "sns_topic": "Aegis-Flash-Flood-Alerts",
+                    "sqs_queue": "Aegis-SOS-Triage-Queue.fifo",
+                    "ssm_parameters": "/aegis/prod/*",
                 },
             }
 

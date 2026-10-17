@@ -4,10 +4,11 @@ import time
 import uuid
 import hashlib
 import numpy as np
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.agent.tools import (
     check_rainfall_detailed,
@@ -16,6 +17,9 @@ from app.agent.tools import (
     trigger_voice_call,
     generate_multilingual_voice_script,
 )
+from app.api.auth_deps import require_official
+from app.agent import shelters as shelter_registry
+from app.mcp.web_intel_tools import WEB_INTEL_REGISTRY, WEB_INTEL_TOOLS, MCPToolInputError
 from app.aws import (
     s3_service,
     dynamodb_service,
@@ -130,10 +134,11 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "find_safe_shelters",
-        "description": "Finds high-ground relief shelters with elevation and capacity metadata.",
+        "description": "Lists shelters for a place: relief camps from the latest official report (web evidence, cited), "
+                       "else registry shelters within 50 km, else an empty list with status no_verified_shelters.",
         "inputSchema": {
             "type": "object",
-            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
+            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}, "location": {"type": "string"}},
             "required": ["lat", "lon"],
         },
         "requires_official_approval": False,
@@ -153,8 +158,13 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         "description": "Runs capacity-constrained shelter allocation with human-override support.",
         "inputSchema": {
             "type": "object",
-            "properties": {"population_affected": {"type": "integer"}, "location": {"type": "string"}},
-            "required": ["population_affected"],
+            "properties": {
+                "population_affected": {"type": "integer"},
+                "location": {"type": "string"},
+                "lat": {"type": "number"},
+                "lon": {"type": "number"},
+            },
+            "required": ["population_affected", "lat", "lon"],
         },
         "requires_official_approval": False,
     },
@@ -181,6 +191,11 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "area_sq_km": {"type": "number"},
                 "max_depth_m": {"type": "number"},
                 "language": {"type": "string"},
+                "helplines": {
+                    "type": "array",
+                    "description": "Web-evidence helplines; only items with validation_status verified are used.",
+                    "items": {"type": "object"},
+                },
             },
             "required": ["location", "lat", "lon", "severity"],
         },
@@ -188,7 +203,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "dispatch_approved_alert",
-        "description": "Dispatches HITL-approved emergency voice call to +917678656930 in Hindi or English via Twilio.",
+        "description": "Dispatches a HITL-approved emergency voice call to the draft's recipient in Hindi or English via Twilio.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -242,6 +257,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "severity_level": {"type": "string"},
                 "water_depth_m": {"type": "number"},
                 "shelter_name": {"type": "string"},
+                "dry_run": {"type": "boolean"},
             },
             "required": ["location", "severity_level"],
         },
@@ -384,6 +400,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "lat": {"type": "number"},
                 "lon": {"type": "number"},
                 "severity": {"type": "string"},
+                "dry_run": {"type": "boolean"},
             },
             "required": ["location"],
         },
@@ -399,9 +416,10 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "param_name": {"type": "string"},
                 "param_value": {"type": "string"},
                 "sos_payload": {"type": "object"},
+                "dry_run": {"type": "boolean"},
             },
         },
-        "requires_official_approval": False,
+        "requires_official_approval": True,
     },
     {
         "name": "aws_provision_free_tier_resources",
@@ -412,7 +430,7 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
                 "dry_run": {"type": "boolean"},
             },
         },
-        "requires_official_approval": False,
+        "requires_official_approval": True,
     },
     {
         "name": "aws_run_free_tier_diagnostic_suite",
@@ -427,7 +445,12 @@ MCP_TOOLS_REGISTRY: List[Dict[str, Any]] = [
         },
         "requires_official_approval": False,
     },
+    *WEB_INTEL_REGISTRY,
 ]
+
+
+HITL_ONLY_TOOLS = frozenset(t["name"] for t in MCP_TOOLS_REGISTRY if t["requires_official_approval"])
+HITL_ONLY_REFUSAL = "dispatch tools run only through HITL approval"
 
 
 def build_cap_v12_payload(
@@ -435,9 +458,10 @@ def build_cap_v12_payload(
     lat: float,
     lon: float,
     severity: str,
-    area_sq_km: float = 2.4,
-    max_depth_m: float = 0.72,
+    area_sq_km: Optional[float] = 2.4,
+    max_depth_m: Optional[float] = 0.72,
     language: str = "hi",
+    helplines: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Generates an ITU/WMO & NDMA SACHET Common Alerting Protocol (CAP v1.2)
@@ -450,6 +474,23 @@ def build_cap_v12_payload(
 
     speech_hi = generate_multilingual_voice_script(location, severity, language="hi", max_depth_m=max_depth_m)
     speech_en = generate_multilingual_voice_script(location, severity, language="en", max_depth_m=max_depth_m)
+    extent = (
+        f"{area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m"
+        if area_sq_km is not None and max_depth_m is not None
+        else "flood extent and depth not measured: EO analysis unavailable"
+    )
+    loc_x = xml_escape(location)
+    verified = [h for h in helplines or [] if h.get("validation_status") == "verified" and h.get("number")]
+    contact_block = ""
+    if verified:
+        contact = "; ".join(f"{h.get('label') or 'Helpline'}: {h['number']}" for h in verified)
+        instruction = f"Verified helplines (listed by two official sources, retrieved via TinyFish): {contact}."
+        contact_block = (
+            f"\n    <instruction>{xml_escape(instruction)}</instruction>"
+            + (f"\n    <web>{xml_escape(verified[0]['source_url'])}</web>" if verified[0].get("source_url") else "")
+            + f"\n    <contact>{xml_escape(contact)}</contact>"
+        )
+    area_desc = xml_escape(f"{location} ({extent})")
 
     cap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
@@ -466,10 +507,10 @@ def build_cap_v12_payload(
     <urgency>{urgency}</urgency>
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
-    <headline>आपातकालीन बाढ़ चेतावनी: {location}</headline>
-    <description>{speech_hi}</description>
+    <headline>आपातकालीन बाढ़ चेतावनी: {loc_x}</headline>
+    <description>{xml_escape(speech_hi)}</description>{contact_block}
     <area>
-      <areaDesc>{location} ({area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m)</areaDesc>
+      <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
     </area>
   </info>
@@ -480,10 +521,10 @@ def build_cap_v12_payload(
     <urgency>{urgency}</urgency>
     <severity>{cap_sev}</severity>
     <certainty>Observed</certainty>
-    <headline>Emergency Flood Alert: {location}</headline>
-    <description>{speech_en}</description>
+    <headline>Emergency Flood Alert: {loc_x}</headline>
+    <description>{xml_escape(speech_en)}</description>{contact_block}
     <area>
-      <areaDesc>{location} ({area_sq_km:.2f} sq km, Peak Depth {max_depth_m:.2f}m)</areaDesc>
+      <areaDesc>{area_desc}</areaDesc>
       <circle>{lat:.4f},{lon:.4f} 4.0</circle>
     </area>
   </info>
@@ -501,9 +542,13 @@ def build_cap_v12_payload(
         "headline_en": f"Emergency Flood Alert: {location}",
         "script_hi": speech_hi,
         "script_en": speech_en,
-        "target_demo_phone": "+917678656930",
         "xml": cap_xml,
+        "helplines": verified,
     }
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    return None if value is None else float(value)
 
 
 def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict[str, Any]:
@@ -512,11 +557,15 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         return _IDEMPOTENCY_CACHE[idempotency_key]
 
     t0 = time.perf_counter()
+    web_intel_meta: Optional[Dict[str, Any]] = None
     lat = float(arguments.get("lat", 25.5941))
     lon = float(arguments.get("lon", 85.1376))
     location = str(arguments.get("location", arguments.get("query", "Patna, Bihar")))
 
-    if tool_name == "geocode_location":
+    if tool_name in WEB_INTEL_TOOLS:
+        data, web_intel_meta = WEB_INTEL_TOOLS[tool_name](arguments)
+
+    elif tool_name == "geocode_location":
         import requests as req
         q = str(arguments.get("query", "Patna"))
         data = {"query": q, "lat": 25.5941, "lon": 85.1376, "source": "Open-Meteo Geocoding"}
@@ -540,6 +589,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         data = {
             "sentinel2_scene": f"S2B_MSIL2A_{datetime.now(timezone.utc).strftime('%Y%m%d')}_T45QWF",
             "sentinel1_scene": f"S1A_IW_GRDH_{datetime.now(timezone.utc).strftime('%Y%m%d')}_VV_VH",
+            "scene_id_provenance": "synthetic",
+            "input_provenance": "esri_basemap+synthetic_sar",
             "cloud_cover_pct": sat["cloud_cover"],
             "fusion_mode": "SAR_DOMINATED_CLOUD_GATE" if sat["cloud_cover"] > 35 else "DUAL_OPTICAL_SAR_FUSION",
         }
@@ -567,6 +618,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "base_elevation_m": round(base_elev, 1),
             "ecc_alignment": ecc_meta,
             "cloud_cover_pct": sat["cloud_cover"],
+            "input_provenance": "esri_basemap+synthetic_sar",
         }
 
     elif tool_name == "run_urnn_nowcast":
@@ -581,6 +633,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             "latency_ms": res["latency_ms"],
             "telemetry": res["telemetry"],
             "horizon_metrics": res["horizon_metrics"],
+            "depth_provenance": res["depth_provenance"],
         }
 
     elif tool_name == "estimate_osm_impact":
@@ -589,26 +642,14 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         data = calculate_live_impact(lat, lon, area_sq_km=area_km2)
 
     elif tool_name == "find_safe_shelters":
-        data = {
-            "shelters": [
-                {"name": f"{location} High School Relief Center", "lat": round(lat + 0.014, 5), "lon": round(lon + 0.011, 5), "elevation_m": 64.2, "capacity": 650},
-                {"name": f"{location} NDRF Elevated Community Hall", "lat": round(lat - 0.012, 5), "lon": round(lon + 0.016, 5), "elevation_m": 66.8, "capacity": 500},
-            ]
-        }
+        data = shelter_registry.find_safe_shelters(location, lat, lon)
 
     elif tool_name == "compute_dynamic_evacuation":
         from app.aegis.routing.evacuation_engine import compute_elevation_evacuation_route
-        data = compute_elevation_evacuation_route(lat, lon)
+        data = compute_elevation_evacuation_route(lat, lon, shelter_registry.nearest_registry_shelter(lat, lon))
 
     elif tool_name == "allocate_shelter_capacity":
-        pop = int(arguments.get("population_affected", 1200))
-        data = {
-            "allocated_population": pop,
-            "primary_shelter_allocated": min(pop, 650),
-            "secondary_shelter_allocated": max(0, pop - 650),
-            "unallocated": 0,
-            "status": "CAPACITY_BALANCED",
-        }
+        data = shelter_registry.allocate(int(arguments["population_affected"]), location, lat, lon)
 
     elif tool_name == "verify_crowd_cluster":
         user_sev_weight = float(arguments.get("user_severity_weight", 88.0))
@@ -626,18 +667,19 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             lat=lat,
             lon=lon,
             severity=str(arguments.get("severity", "CRITICAL")),
-            area_sq_km=float(arguments.get("area_sq_km", 2.6)),
-            max_depth_m=float(arguments.get("max_depth_m", 0.78)),
+            area_sq_km=_optional_float(arguments.get("area_sq_km")),
+            max_depth_m=_optional_float(arguments.get("max_depth_m")),
             language=str(arguments.get("language", "hi")),
+            helplines=arguments.get("helplines"),
         )
 
     elif tool_name == "dispatch_approved_alert":
         data = trigger_voice_call(
-            phone_number=str(arguments.get("phone_number", "+917678656930")),
+            phone_number=arguments.get("phone_number"),
             location=location,
             severity=str(arguments.get("severity", "CRITICAL")),
             language=str(arguments.get("language", "hi")),
-            max_depth_m=float(arguments.get("max_depth_m", 0.78)),
+            max_depth_m=_optional_float(arguments.get("max_depth_m")),
         )
 
     elif tool_name == "aws_upload_report_s3":
@@ -662,6 +704,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             severity_level=str(arguments.get("severity_level", "CRITICAL")),
             water_depth_m=float(arguments.get("water_depth_m", 1.2)),
             shelter_name=str(arguments.get("shelter_name", "Gandhi Maidan Relief Camp")),
+            dry_run=bool(arguments.get("dry_run", False)),
         )
 
     elif tool_name == "aws_synthesize_voice_polly":
@@ -746,15 +789,18 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         )
 
     elif tool_name == "aws_orchestrate_step_functions":
+        dry_run = bool(arguments.get("dry_run", False))
         evt = events_sfn_service.publish_disaster_event(
             detail_type="FloodAnomalyDetected",
             detail={"location": location, "lat": lat, "lon": lon, "severity": arguments.get("severity", "CRITICAL")},
+            dry_run=dry_run,
         )
         sfn = events_sfn_service.start_incident_workflow(
             location=location,
             lat=lat,
             lon=lon,
             severity=str(arguments.get("severity", "CRITICAL")),
+            dry_run=dry_run,
         )
         data = {"eventbridge": evt, "step_functions": sfn}
 
@@ -762,7 +808,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         act = str(arguments.get("action", "status")).lower()
         if act == "enqueue_sos":
             data = sqs_ssm_service.enqueue_sos_packet(
-                arguments.get("sos_payload") or {"location": location, "severity": "CRITICAL", "trapped": 4}
+                arguments.get("sos_payload") or {"location": location, "severity": "CRITICAL", "trapped": 4},
+                dry_run=bool(arguments.get("dry_run", False)),
             )
         elif act == "update_param":
             data = sqs_ssm_service.update_operational_parameter(
@@ -773,7 +820,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             data = sqs_ssm_service.get_operational_parameters()
 
     elif tool_name == "aws_provision_free_tier_resources":
-        data = aws_provisioner.provision_all()
+        data = aws_provisioner.provision_all(dry_run=bool(arguments.get("dry_run", False)))
 
     elif tool_name == "aws_run_free_tier_diagnostic_suite":
         suite_t0 = time.perf_counter()
@@ -781,7 +828,7 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon S3", "aws_upload_report_s3", {"local_filepath": "./reports/report_patna_district_1787128244.pdf"}),
             ("Amazon DynamoDB (Reports)", "aws_record_ground_report_dynamodb", {"location_name": location, "severity": "CRITICAL", "water_depth": "Chest-deep"}),
             ("Amazon DynamoDB (Shelters)", "aws_manage_shelters_dynamodb", {"action": "list"}),
-            ("Amazon SNS", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84}),
+            ("Amazon SNS (dry run, nothing published)", "aws_broadcast_alert_sns", {"location": location, "severity_level": "CRITICAL", "water_depth_m": 0.84, "dry_run": True}),
             ("Amazon Polly", "aws_synthesize_voice_polly", {"text": f"सावधान! {location} में बाढ़ की चेतावनी।", "language": "hi-IN"}),
             ("Amazon Cognito", "aws_verify_cognito_identity", {"username": "ndrf_commander", "role": "IncidentCommander"}),
             ("Amazon CloudWatch", "aws_get_cloudwatch_metrics", {}),
@@ -790,9 +837,9 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
             ("Amazon Translate", "aws_translate_emergency_bulletin", {"text": "Evacuate low-lying river corridors immediately.", "target_language": "as", "location": location}),
             ("Amazon Comprehend", "aws_triage_sos_comprehend", {"description": "5 elderly citizens and 2 infants trapped near hospital in chest-deep water", "location": location}),
             ("Amazon Rekognition", "aws_verify_flood_photo_rekognition", {"image_path": "./delhi_optical.png", "claimed_severity": "CRITICAL", "location": location}),
-            ("EventBridge & Step Functions", "aws_orchestrate_step_functions", {"location": location, "lat": lat, "lon": lon, "severity": "CRITICAL"}),
-            ("Amazon SQS & AWS SSM", "aws_queue_and_ssm_config", {"action": "enqueue_sos", "sos_payload": {"location": location, "severity": "CRITICAL"}}),
-            ("AWS Free Tier Provisioner", "aws_provision_free_tier_resources", {"dry_run": False}),
+            ("EventBridge & Step Functions (dry run, nothing started)", "aws_orchestrate_step_functions", {"location": location, "lat": lat, "lon": lon, "severity": "CRITICAL", "dry_run": True}),
+            ("Amazon SQS & AWS SSM (dry run, nothing enqueued)", "aws_queue_and_ssm_config", {"action": "enqueue_sos", "sos_payload": {"location": location, "severity": "CRITICAL"}, "dry_run": True}),
+            ("AWS Free Tier Provisioner (dry run, nothing created)", "aws_provision_free_tier_resources", {"dry_run": True}),
         ]
         results_matrix = []
         for svc_label, sub_name, sub_args in sub_tools:
@@ -828,6 +875,8 @@ def execute_mcp_tool(tool_name: str, arguments: Dict[str, Any], idempotency_key:
         "sha256_hash": sha256_hash,
         "sha256_signature": sha256_hash,
     }
+    if web_intel_meta:
+        provenance["web_intel"] = web_intel_meta
     envelope = {"status": "SUCCESS", "tool_name": tool_name, "data": data, "provenance": provenance}
 
     _MCP_PROVENANCE_LEDGER.insert(0, provenance)
@@ -856,10 +905,14 @@ async def list_mcp_tools():
     }
 
 
-@mcp_router.post("/execute")
+@mcp_router.post("/execute", dependencies=[Depends(require_official)])
 async def http_execute_mcp_tool(req: MCPExecuteRequest):
+    if req.tool_name in HITL_ONLY_TOOLS:
+        raise HTTPException(status_code=403, detail=HITL_ONLY_REFUSAL)
     try:
         return execute_mcp_tool(req.tool_name, req.arguments, req.idempotency_key)
+    except MCPToolInputError as bad:
+        raise HTTPException(status_code=422, detail=str(bad))
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
@@ -893,39 +946,47 @@ def build_cap_v12_alert(
 
 def run_stdio_mcp_server():
     """Standard JSON-RPC 2.0 stdio transport for external MCP hosts (Claude Desktop / Cursor)."""
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-            req_id = msg.get("id")
-            method = msg.get("method")
-            params = msg.get("params", {})
+    protocol_out = sys.stdout
+    # Tools and services print() diagnostics; stdout must carry nothing but JSON-RPC frames.
+    sys.stdout = sys.stderr
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                req_id = msg.get("id")
+                method = msg.get("method")
+                params = msg.get("params", {})
 
-            if method == "initialize":
-                res = {
-                    "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
-                    "capabilities": {"tools": {}},
-                }
-            elif method == "tools/list":
-                res = {"tools": MCP_TOOLS_REGISTRY}
-            elif method == "tools/call":
-                t_name = params.get("name")
-                t_args = params.get("arguments", {})
-                out = execute_mcp_tool(t_name, t_args)
-                res = {"content": [{"type": "text", "text": json.dumps(out)}]}
-            else:
-                res = {"status": "ok"}
+                if method == "initialize":
+                    res = {
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {"name": "aegis-flood-mcp-server", "version": "2.0.0"},
+                        "capabilities": {"tools": {}},
+                    }
+                elif method == "tools/list":
+                    res = {"tools": MCP_TOOLS_REGISTRY}
+                elif method == "tools/call":
+                    t_name = params.get("name")
+                    t_args = params.get("arguments", {})
+                    if t_name in HITL_ONLY_TOOLS:
+                        raise PermissionError(HITL_ONLY_REFUSAL)
+                    out = execute_mcp_tool(t_name, t_args)
+                    res = {"content": [{"type": "text", "text": json.dumps(out)}]}
+                else:
+                    res = {"status": "ok"}
 
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
-            sys.stdout.flush()
-        except Exception as exc:
-            sys.stdout.write(
-                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
-            )
-            sys.stdout.flush()
+                protocol_out.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "result": res}) + "\n")
+                protocol_out.flush()
+            except Exception as exc:
+                protocol_out.write(
+                    json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": str(exc)}}) + "\n"
+                )
+                protocol_out.flush()
+    finally:
+        sys.stdout = protocol_out
 
 
 if __name__ == "__main__":

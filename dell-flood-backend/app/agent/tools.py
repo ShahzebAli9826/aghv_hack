@@ -1,9 +1,12 @@
 import os
 import io
+import textwrap
 import math
 import html
+import uuid
 import requests
 import numpy as np
+from typing import Optional
 from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -18,12 +21,12 @@ except ImportError:
     TwilioClient = None
     VoiceResponse = None
 
-DEFAULT_DEMO_CALL_NUMBER = "+917678656930"
-
-
-def send_sms_alert(phone_number: str = "+917678656930", message: str = "") -> bool:
-    """Dispatches an E.164-validated SMS alert defaulting to +917678656930 (Solves P2 & P34)."""
-    target_phone = normalize_and_validate_phone(phone_number, default_demo="+917678656930")
+def send_sms_alert(phone_number: Optional[str], message: str = "") -> bool:
+    """Dispatches an E.164-validated SMS alert; an empty or invalid number sends nothing (Solves P2 & P34)."""
+    target_phone = normalize_and_validate_phone(phone_number)
+    if target_phone is None:
+        print(f"[Twilio Alert] No valid recipient ({phone_number!r}); SMS not sent.")
+        return False
 
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -50,7 +53,7 @@ def generate_multilingual_voice_script(
     location: str,
     severity: str,
     language: str = "hi",
-    max_depth_m: float = 0.65,
+    max_depth_m: Optional[float] = 0.65,
     shelter_name: str = "High-Ground NDRF Relief Camp",
 ) -> str:
     """
@@ -61,28 +64,31 @@ def generate_multilingual_voice_script(
     lang_code = "hi" if str(language).lower().startswith("hi") else "en"
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    depth_en = f" to {max_depth_m:.2f} meters" if max_depth_m is not None else ""
+    depth_hi = f" {max_depth_m:.2f} मीटर तक" if max_depth_m is not None else ""
 
     if lang_code == "hi":
         prompt = (
             f"Write an urgent, 25-word emergency flood voice call warning in pure HINDI (Devanagari script) "
-            f"alerting citizens near {location} that {severity} floodwater is rising to {max_depth_m:.2f} meters. "
+            f"alerting citizens near {location} that {severity} floodwater is rising{depth_en}. "
             f"Instruct them to immediately evacuate to {shelter_name}. "
             f"Return ONLY the spoken Hindi text without quotes, markdown, or stage directions."
         )
         fallback_script = (
-            f"आपातकालीन बाढ़ चेतावनी! {location} क्षेत्र में {severity} स्तर की बाढ़ का पानी {max_depth_m:.2f} मीटर तक बढ़ रहा है। "
+            f"आपातकालीन बाढ़ चेतावनी! {location} क्षेत्र में {severity} स्तर की बाढ़ का पानी{depth_hi} बढ़ रहा है। "
             f"कृपया तुरंत निकटतम सुरक्षित राहत शिविर {shelter_name} की ओर प्रस्थान करें।"
         )
     else:
         prompt = (
             f"Write an urgent, 25-word emergency flood voice call warning in English "
-            f"alerting citizens near {location} that {severity} floodwater is rising to {max_depth_m:.2f} meters. "
+            f"alerting citizens near {location} that {severity} floodwater is rising{depth_en}. "
             f"Instruct them to immediately evacuate to {shelter_name}. "
             f"Return ONLY the spoken English text without quotes, markdown, or stage directions."
         )
         fallback_script = (
-            f"Emergency Flood Warning! {severity} floodwater near {location} is projected to reach {max_depth_m:.2f} meters. "
-            f"Please evacuate immediately to {shelter_name} on higher ground."
+            f"Emergency Flood Warning! {severity} floodwater near {location} "
+            + (f"is projected to reach {max_depth_m:.2f} meters. " if max_depth_m is not None else "is rising. ")
+            + f"Please evacuate immediately to {shelter_name} on higher ground."
         )
 
     if gemini_key:
@@ -147,7 +153,7 @@ def build_safe_twiml_say(speech_text: str, language: str = "hi") -> str:
 
 
 def trigger_voice_call(
-    phone_number: str = "+917678656930",
+    phone_number: Optional[str] = None,
     location: str = "Patna",
     severity: str = "CRITICAL",
     language: str = "hi",
@@ -158,11 +164,21 @@ def trigger_voice_call(
     **kwargs,
 ) -> dict:
     """
-    Triggers an outbound emergency voice call strictly defaulting to +917678656930 (7678656930)
-    with a dynamically generated Hindi ('hi') or English ('en') LLM warning script (Solves P2 & P34).
+    Triggers an outbound emergency voice call with a dynamically generated Hindi ('hi') or English ('en')
+    LLM warning script. An empty or invalid number places no call (Solves P2 & P34).
     """
-    target_phone = normalize_and_validate_phone(phone_number, default_demo="+917678656930")
+    target_phone = normalize_and_validate_phone(phone_number)
     lang_code = "hi" if str(language).lower().startswith("hi") else "en"
+    if target_phone is None:
+        print(f"[Twilio IVR] No valid recipient ({phone_number!r}); no call placed.")
+        return {
+            "status": "NO_RECIPIENT",
+            "mode": "not_dialed",
+            "call_sid": None,
+            "target": None,
+            "language": "hi-IN" if lang_code == "hi" else "en-IN",
+            "detail": "No valid recipient phone number; no call was placed.",
+        }
 
     speech_text = message or custom_message or generate_multilingual_voice_script(
         location=location,
@@ -249,7 +265,7 @@ def trigger_voice_call(
     return {
         "status": "SUCCESS",
         "mode": "simulated_gateway",
-        "call_sid": "SIM_CALL_7678656930",
+        "call_sid": f"SIM_CALL_{uuid.uuid4().hex[:10]}",
         "target": target_phone,
         "language": "hi-IN" if lang_code == "hi" else "en-IN",
         "voice": "Polly.Aditi" if lang_code == "hi" else "alice",
@@ -437,8 +453,8 @@ def export_pdf(filepath: str, report_text: str, location: str, severity: str) ->
     try:
         safe_dir = os.path.dirname(filepath) or "./reports"
         os.makedirs(safe_dir, exist_ok=True)
-        safe_loc = slugify_location(location)
-        safe_path = os.path.join(safe_dir, f"report_{safe_loc}.pdf")
+        safe_name = slugify_location(os.path.splitext(os.path.basename(filepath))[0] or f"report_{location}")
+        safe_path = os.path.join(safe_dir, f"{safe_name}.pdf")
 
         c = canvas.Canvas(safe_path, pagesize=letter)
         c.setFont("Helvetica-Bold", 15)
@@ -449,12 +465,13 @@ def export_pdf(filepath: str, report_text: str, location: str, severity: str) ->
         c.drawString(50, 722, f"Alert Severity Level: {severity}")
 
         y = 690
-        for line in str(report_text).split("\n"):
-            if y < 60:
-                c.showPage()
-                y = 750
-            c.drawString(50, y, line[:105])
-            y -= 14
+        for raw_line in str(report_text).split("\n"):
+            for line in textwrap.wrap(raw_line, 105, break_long_words=True, replace_whitespace=False) or [""]:
+                if y < 60:
+                    c.showPage()
+                    y = 750
+                c.drawString(50, y, line)
+                y -= 14
 
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(50, 35, "Generated by Aegis Multimodal AI Prototype (Not an official NDMA/SDMA directive)")

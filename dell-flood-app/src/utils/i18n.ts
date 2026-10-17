@@ -1,8 +1,5 @@
 export type AppLanguage = "en" | "hi";
 
-export const DEFAULT_DEMO_PHONE = "7678656930";
-export const DEFAULT_DEMO_PHONE_E164 = "+917678656930";
-
 export const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
   en: {
     // App Branding & Header
@@ -116,9 +113,9 @@ export const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
     photo_attached_badge: "📷 Flood Photo Attached (Compressed <=150KB)",
     submit_report: "Submit Flood Report",
     submitting_report: "Submitting Report...",
-    call_demo_btn: "📞 Call 7678656930 (LLM Hindi/EN Alert)",
-    callDemoBtn: "📞 Call +91 7678656930 (Live AI Hindi/EN Voice Alert)",
-    calling_demo: "Dispatching LLM Voice Call to +917678656930...",
+    call_demo_btn: "📞 Call demo recipient (LLM Hindi/EN Alert)",
+    callDemoBtn: "📞 Call demo recipient (Live AI Hindi/EN Voice Alert)",
+    calling_demo: "Dispatching LLM voice call to the demo recipient...",
     severity_low: "LOW",
     severity_moderate: "MODERATE",
     severity_high: "HIGH",
@@ -162,7 +159,7 @@ export const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
     runAgentCycle: "Run Autonomous Agent Cycle",
     mcp_ledger_title: "MCP Tool Provenance & Audit Ledger",
     hitl_queue_title: "HITL Operator Approval Queue",
-    approve_call_btn: "Approve & Call +917678656930",
+    approve_call_btn: "Approve & Call",
   },
   hi: {
     // App Branding & Header
@@ -276,9 +273,9 @@ export const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
     photo_attached_badge: "📷 बाढ़ फोटो संलग्न (<=150KB)",
     submit_report: "बाढ़ शिकायत भेजें",
     submitting_report: "शिकायत भेजी जा रही है...",
-    call_demo_btn: "📞 7678656930 पर AI हिंदी वॉयस कॉल करें",
-    callDemoBtn: "📞 +91 7678656930 पर लाइव AI हिंदी वॉयस अलर्ट कॉल करें",
-    calling_demo: "+917678656930 पर AI वॉयस कॉल भेजी जा रही है...",
+    call_demo_btn: "📞 डेमो प्राप्तकर्ता को AI हिंदी वॉयस कॉल करें",
+    callDemoBtn: "📞 डेमो प्राप्तकर्ता को लाइव AI हिंदी वॉयस अलर्ट कॉल करें",
+    calling_demo: "डेमो प्राप्तकर्ता को AI वॉयस कॉल भेजी जा रही है...",
     severity_low: "कम (LOW)",
     severity_moderate: "मध्यम (MODERATE)",
     severity_high: "उच्च (HIGH)",
@@ -322,7 +319,7 @@ export const TRANSLATIONS: Record<AppLanguage, Record<string, string>> = {
     runAgentCycle: "स्वायत्त एजेंट चक्र चलाएं",
     mcp_ledger_title: "MCP टूल ऑडिट एवं प्रमाण लॉग",
     hitl_queue_title: "ऑपरेटर अनुमोदन कतार (HITL)",
-    approve_call_btn: "अनुमोदित करें व +917678656930 पर कॉल करें",
+    approve_call_btn: "अनुमोदित करें व कॉल करें",
   },
 };
 

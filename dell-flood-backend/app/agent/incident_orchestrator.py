@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import time
 import uuid
 import sqlite3
@@ -7,9 +8,116 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, TypedDict
 
 from app.mcp.aegis_mcp_server import execute_mcp_tool, build_cap_v12_payload
-from app.RAG.generator import SituationReportGenerator
+from app.RAG.generator import SituationReportGenerator, format_official_sources
+from app.api.auth_deps import normalize_and_validate_phone
+from app.agent import web_evidence
+from app.aws import sns_service, polly_service
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
+DB_PATH = os.getenv("AEGIS_APP_DB") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "flood_app.db")
+# HITL lifecycle: PENDING -> DISPATCHING (atomic claim) -> APPROVED_AND_DISPATCHED | APPROVED_NO_RECIPIENT | DISPATCH_FAILED.
+# DISPATCH_FAILED can be claimed again by an explicit re-approval; nothing retries on its own.
+HITL_PENDING = "PENDING_OFFICIAL_APPROVAL"
+HITL_DISPATCHING = "APPROVED_DISPATCHING"
+HITL_APPROVED = "APPROVED_AND_DISPATCHED"
+HITL_APPROVED_NO_RECIPIENT = "APPROVED_NO_RECIPIENT"
+HITL_DISPATCH_FAILED = "DISPATCH_FAILED"
+HITL_CLAIMABLE = (HITL_PENDING, HITL_DISPATCH_FAILED)
+
+ESCALATION_TIERS = ("NONE", "YELLOW", "ORANGE", "RED")
+SEVERITY_BY_TIER = {"NONE": "LOW", "YELLOW": "MODERATE", "ORANGE": "HIGH", "RED": "CRITICAL"}
+REPORT_SEVERITY_WEIGHTS = {
+    "CRITICAL": 100.0,
+    "SEVERE": 92.0,
+    "HIGH": 80.0,
+    "MODERATE": 60.0,
+    "MEDIUM": 60.0,
+    "LOW": 35.0,
+    "MINOR": 25.0,
+}
+# Same relative path as endpoints.DB_PATH (citizen complaints); opened read-only.
+CROWD_DB_PATH = "flood_database.db"
+CROWD_RADIUS_KM = 2.0
+CROWD_WINDOW_S = 12 * 3600
+
+
+def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    x = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2.0)) * 111.32
+    y = (lat2 - lat1) * 110.57
+    return math.hypot(x, y)
+
+
+def nearby_report_severity(lat: float, lon: float) -> Dict[str, Any]:
+    """Mean severity weight (0-100) of unresolved citizen reports within 2 km in the last 12 h; 0 when there are none."""
+    try:
+        conn = sqlite3.connect(f"file:{CROWD_DB_PATH}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT latitude, longitude, reported_severity FROM complaints WHERE status != 'resolved' AND timestamp >= ?",
+                (time.time() - CROWD_WINDOW_S,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return {"weight": 0.0, "report_count": 0, "provenance": f"complaints unavailable ({exc}); user severity set to 0"}
+    weights = [
+        REPORT_SEVERITY_WEIGHTS.get(str(sev or "").upper(), REPORT_SEVERITY_WEIGHTS["MODERATE"])
+        for r_lat, r_lon, sev in rows
+        if _distance_km(lat, lon, float(r_lat), float(r_lon)) <= CROWD_RADIUS_KM
+    ]
+    if not weights:
+        return {"weight": 0.0, "report_count": 0, "provenance": "no unresolved citizen reports within 2 km in 12 h; user severity set to 0"}
+    return {
+        "weight": round(sum(weights) / len(weights), 1),
+        "report_count": len(weights),
+        "provenance": f"mean severity of {len(weights)} unresolved citizen report(s) within 2 km in 12 h",
+    }
+
+
+def _parse_json(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return {"status": "UNREADABLE"}
+
+
+def _row_view(row: sqlite3.Row) -> Dict[str, Any]:
+    view = dict(row)
+    view["web_evidence"] = _parse_json(view.pop("evidence_json", None))
+    view["dispatch_receipt"] = _parse_json(view.get("dispatch_receipt"))
+    return view
+
+
+class HitlDraftNotFound(LookupError):
+    def __init__(self, draft_id: str):
+        super().__init__(f"HITL draft {draft_id} does not exist")
+        self.draft_id = draft_id
+
+
+class HitlDispatchFailed(RuntimeError):
+    def __init__(self, draft_id: str, error: str):
+        super().__init__(
+            f"HITL draft {draft_id} was approved but dispatch failed ({error}); "
+            f"it is {HITL_DISPATCH_FAILED} and can be approved again to retry."
+        )
+        self.draft_id = draft_id
+        self.error = error
+
+
+class HitlDraftNotPending(RuntimeError):
+    def __init__(self, draft_id: str, status: str):
+        super().__init__(f"HITL draft {draft_id} is {status}, not {HITL_PENDING}")
+        self.draft_id = draft_id
+        self.status = status
+
+
+HITL_ADDED_COLUMNS = (
+    ("evidence_json", "TEXT"),
+    ("dispatch_receipt", "TEXT"),
+    ("dispatch_error", "TEXT"),
+    ("dispatched_at", "REAL"),
+)
 
 
 def _init_orchestrator_tables():
@@ -40,6 +148,10 @@ def _init_orchestrator_tables():
             )
             """
         )
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(hitl_approvals)")}
+        for name, ddl in HITL_ADDED_COLUMNS:
+            if name not in columns:
+                cur.execute(f"ALTER TABLE hitl_approvals ADD COLUMN {name} {ddl}")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -89,13 +201,14 @@ class MultiAgentIncidentOrchestrator:
         lon: float,
         language: str = "hi",
         report_format: str = "NDMA",
-        auto_approve_hitl: bool = False,
+        target_phone: Optional[str] = None,
     ) -> Dict[str, Any]:
         run_id = f"inc_{uuid.uuid4().hex[:8]}"
         logs: List[str] = []
         mcp_calls: List[Dict[str, Any]] = []
         nodes_status = {
             "MonitorAgent": "PENDING",
+            "WebEvidenceAgent": "PENDING",
             "CrowdIntelligenceAgent": "PENDING",
             "EOAnalystAgent": "PENDING",
             "LogisticsAgent": "PENDING",
@@ -108,6 +221,16 @@ class MultiAgentIncidentOrchestrator:
             mcp_calls.append(env["provenance"])
             return env["data"]
 
+        escalation = "NONE"
+        escalation_reasons: List[str] = []
+        degraded: Dict[str, str] = {}
+
+        def escalate(tier: str, reason: str):
+            nonlocal escalation
+            escalation_reasons.append(f"{tier}: {reason}")
+            if ESCALATION_TIERS.index(tier) > ESCALATION_TIERS.index(escalation):
+                escalation = tier
+
         # ------------------------------------------------------------------
         # NODE 1: MonitorAgent (Weather + Live GloFAS River Discharge)
         # ------------------------------------------------------------------
@@ -119,9 +242,12 @@ class MultiAgentIncidentOrchestrator:
             {"location": location, "lat": lat, "lon": lon, "rainfall_5d_mm": rain_data["antecedent_rain_5d_mm"]},
         )
 
-        escalation = "YELLOW"
-        if gauge_data["status"] == "DANGER" or rain_data["total_window_rain_mm"] >= 90.0:
-            escalation = "ORANGE"
+        if gauge_data["status"] == "DANGER":
+            escalate("ORANGE", "GloFAS gauge status DANGER")
+        elif gauge_data["status"] == "WARNING":
+            escalate("YELLOW", "GloFAS gauge status WARNING")
+        if rain_data["total_window_rain_mm"] >= 90.0:
+            escalate("ORANGE", f"5-day + 24-h rain {rain_data['total_window_rain_mm']} mm >= 90 mm")
         nodes_status["MonitorAgent"] = "COMPLETED"
         logs.append(
             f"[MonitorAgent] Antecedent 5d Rain: {rain_data['antecedent_rain_5d_mm']}mm | "
@@ -130,108 +256,219 @@ class MultiAgentIncidentOrchestrator:
         )
 
         # ------------------------------------------------------------------
-        # NODE 2: CrowdIntelligenceAgent (60/40 Citizen Cluster Verification)
+        # NODE 1b: WebEvidenceAgent (read-only: attaches stored official-source evidence, never escalates)
         # ------------------------------------------------------------------
-        nodes_status["CrowdIntelligenceAgent"] = "RUNNING"
-        crowd_data = invoke_mcp("verify_crowd_cluster", {"lat": lat, "lon": lon, "user_severity_weight": 90.0, "model_prob_pct": 86.0})
-        nodes_status["CrowdIntelligenceAgent"] = "COMPLETED"
-        logs.append(
-            f"[CrowdIntelligenceAgent] 60/40 Verification Score: {crowd_data['verification_score']}% "
-            f"(Isolated via <untrusted_citizen_report> tags)."
-        )
+        nodes_status["WebEvidenceAgent"] = "RUNNING"
+        web_intel = web_evidence.lookup(location, lat, lon)
+        nodes_status["WebEvidenceAgent"] = web_intel["status"]
+        if web_intel["status"] == web_evidence.FAILED:
+            degraded["WebEvidenceAgent"] = web_intel["error"]
+            logs.append(f"[WebEvidenceAgent] FAILED: {web_intel['error']}. The cycle continues without web evidence.")
+        else:
+            logs.append(
+                f"[WebEvidenceAgent] {web_intel['status']}: {len(web_intel['evidence'])} official-source item(s) "
+                f"from run {web_intel['run_id'] or 'none'} attached for human review; escalation unchanged ({escalation})."
+            )
 
         # ------------------------------------------------------------------
-        # NODE 3: EOAnalystAgent (SegFormer SAR+Optical + U-RNN 4D Depth + OSM)
+        # NODE 2: EOAnalystAgent (SegFormer SAR+Optical + U-RNN 4D Depth + OSM)
         # ------------------------------------------------------------------
         nodes_status["EOAnalystAgent"] = "RUNNING"
         logs.append("[EOAnalystAgent] Executing SegFormer MiT-B2 SAR+Optical Fusion & U-RNN 3-Scale ConvGRU 4D Nowcast...")
-        eo_data = invoke_mcp("run_flood_segmentation", {"lat": lat, "lon": lon})
-        urnn_data = invoke_mcp("run_urnn_nowcast", {"lat": lat, "lon": lon, "rain_mm_hr": max(55.0, rain_data["peak_intensity_mm_hr"])})
-        area_km2 = max(0.45, float(eo_data.get("area_sq_km", 1.85)))
-        impact_data = invoke_mcp("estimate_osm_impact", {"lat": lat, "lon": lon, "area_sq_km": area_km2})
+        area_km2: Optional[float] = None
+        peak_depth_60m: Optional[float] = None
+        try:
+            eo_data = invoke_mcp("run_flood_segmentation", {"lat": lat, "lon": lon})
+            urnn_data = invoke_mcp("run_urnn_nowcast", {"lat": lat, "lon": lon, "rain_mm_hr": rain_data["peak_intensity_mm_hr"]})
+            area_km2 = float(eo_data["area_sq_km"])
+            peak_depth_60m = float(urnn_data["horizon_metrics"]["t_60m"]["max_depth_m"])
+        except Exception as exc:
+            degraded["EOAnalystAgent"] = f"{type(exc).__name__}: {exc}"[:300]
+            unknown = f"unknown: EO analysis failed ({degraded['EOAnalystAgent']})"
+            area_km2 = peak_depth_60m = None
+            eo_data = {
+                "status": "FAILED", "error": degraded["EOAnalystAgent"], "classification": None, "area_sq_km": None,
+                "confidence_pct": None, "input_provenance": "esri_basemap+synthetic_sar", "area_provenance": unknown,
+            }
+            urnn_data = {"status": "SKIPPED", "horizon_metrics": {}, "depth_provenance": unknown}
 
-        peak_depth_60m = float(urnn_data["horizon_metrics"]["t_60m"]["max_depth_m"])
-        if area_km2 >= 0.80 or peak_depth_60m >= 0.45:
-            escalation = "RED"
-        severity = "CRITICAL" if escalation == "RED" else ("HIGH" if escalation == "ORANGE" else "MODERATE")
-        nodes_status["EOAnalystAgent"] = "COMPLETED"
-        logs.append(
-            f"[EOAnalystAgent] Active Flood Area: {area_km2:.2f} km² | U-RNN +60m Peak Depth: {peak_depth_60m:.2f}m | "
-            f"OSM Affected: {impact_data['population_affected']:,} citizens, {impact_data['buildings_damaged']} buildings -> Escalation: {escalation}"
+        if "EOAnalystAgent" in degraded:
+            impact_data = {
+                "source": "not estimated: EO analysis failed",
+                "population_affected": None,
+                "buildings_damaged": None,
+                "facilities_at_risk": None,
+            }
+            nodes_status["EOAnalystAgent"] = "FAILED"
+            logs.append(
+                f"[EOAnalystAgent] FAILED: {degraded['EOAnalystAgent']}. Flood area and depth are unknown, OSM impact "
+                f"was skipped, and escalation continues from hydrology only ({escalation})."
+            )
+        else:
+            if area_km2 > 0:
+                impact_data = invoke_mcp("estimate_osm_impact", {"lat": lat, "lon": lon, "area_sq_km": area_km2})
+            else:
+                impact_data = {
+                    "source": "not estimated: segmentation found no flooded area",
+                    "population_affected": 0,
+                    "buildings_damaged": 0,
+                    "facilities_at_risk": 0,
+                }
+            if area_km2 >= 0.80:
+                escalate("RED", f"segmented flood area {area_km2:.2f} km2 >= 0.80 ({eo_data['input_provenance']} input)")
+            # The depth is an untrained heuristic, so it only escalates when observed hydrology already reached ORANGE.
+            if peak_depth_60m >= 0.45 and escalation == "ORANGE":
+                escalate("RED", f"{urnn_data['depth_provenance']} +60 min depth {peak_depth_60m:.2f} m >= 0.45 m with ORANGE hydrology")
+            nodes_status["EOAnalystAgent"] = "COMPLETED"
+            logs.append(
+                f"[EOAnalystAgent] Active Flood Area: {area_km2:.2f} km² ({eo_data['input_provenance']}) | "
+                f"U-RNN +60m Peak Depth: {peak_depth_60m:.2f}m ({urnn_data['depth_provenance']}) | "
+                f"OSM Affected: {impact_data['population_affected']:,} citizens, {impact_data['buildings_damaged']} buildings -> Escalation: {escalation}"
+            )
+
+        # ------------------------------------------------------------------
+        # NODE 3: CrowdIntelligenceAgent (60/40 Citizen Cluster Verification)
+        # ------------------------------------------------------------------
+        nodes_status["CrowdIntelligenceAgent"] = "RUNNING"
+        crowd_input = nearby_report_severity(lat, lon)
+        flooded = bool(area_km2)
+        model_prob_pct = float(eo_data["confidence_pct"]) if flooded else 0.0
+        crowd_data = invoke_mcp(
+            "verify_crowd_cluster",
+            {"lat": lat, "lon": lon, "user_severity_weight": crowd_input["weight"], "model_prob_pct": model_prob_pct},
         )
+        crowd_data["user_severity_provenance"] = crowd_input["provenance"]
+        crowd_data["independent_reports"] = web_evidence.independent_reports(web_intel)
+        crowd_data["model_prob_provenance"] = (
+            "segmentation confidence over flooded pixels" if flooded
+            else "EO analysis failed; model probability set to 0" if "EOAnalystAgent" in degraded
+            else "no flooded pixels; model probability set to 0"
+        )
+        if crowd_data["cluster_verified"]:
+            escalate("YELLOW", f"crowd cluster verified ({crowd_data['verification_score']}%, {crowd_input['report_count']} reports)")
+        nodes_status["CrowdIntelligenceAgent"] = "COMPLETED"
+        logs.append(
+            f"[CrowdIntelligenceAgent] 60/40 Verification Score: {crowd_data['verification_score']}% "
+            f"(user severity: {crowd_input['provenance']}) (Isolated via <untrusted_citizen_report> tags)."
+        )
+        severity = SEVERITY_BY_TIER[escalation]
 
         # ------------------------------------------------------------------
         # NODE 4: LogisticsAgent (Time-Varying Dijkstra Evacuation + Shelters)
         # ------------------------------------------------------------------
         nodes_status["LogisticsAgent"] = "RUNNING"
         evac_data = invoke_mcp("compute_dynamic_evacuation", {"lat": lat, "lon": lon})
-        alloc_data = invoke_mcp("allocate_shelter_capacity", {"population_affected": impact_data["population_affected"], "location": location})
+        if impact_data["population_affected"] is None:
+            alloc_data = {"status": "SKIPPED", "reason": "population not estimated: EO analysis failed"}
+        else:
+            alloc_data = invoke_mcp(
+                "allocate_shelter_capacity",
+                {"population_affected": impact_data["population_affected"], "location": location, "lat": lat, "lon": lon},
+            )
+        evac_data["reported_disruptions"] = web_evidence.reported_disruptions(web_intel)
         nodes_status["LogisticsAgent"] = "COMPLETED"
-        logs.append(
-            f"[LogisticsAgent] Time-Varying Dijkstra Route: {evac_data['distance_km']} km (ETA {evac_data['eta_minutes']} min), "
-            f"bypassed {evac_data['submerged_segments_bypassed']} submerging road segment(s)."
-        )
+        if evac_data["destination"] is None:
+            logs.append("[LogisticsAgent] No verified shelter with known coordinates nearby: no evacuation route computed.")
+        else:
+            logs.append(
+                f"[LogisticsAgent] Time-Varying Dijkstra Route to {evac_data['destination']['name']}: {evac_data['distance_km']} km "
+                f"(ETA {evac_data['eta_minutes']} min), bypassed {evac_data['submerged_segments_bypassed']} submerging road segment(s)."
+            )
+        if evac_data["reported_disruptions"]:
+            logs.append(
+                f"[LogisticsAgent] {len(evac_data['reported_disruptions'])} reported rail/road disruption(s) attached for "
+                "human review; the route was not changed by them."
+            )
 
         # ------------------------------------------------------------------
         # NODE 5: ReporterAgent (4-Format Report + Numeric Claim Validator)
         # ------------------------------------------------------------------
         nodes_status["ReporterAgent"] = "RUNNING"
-        report_text = self.rag_generator.generate_report(
-            location=location,
-            area_sq_km=area_km2,
-            classification=eo_data.get("classification", "Flood Inundation"),
-            severity=severity,
-            population_affected=impact_data["population_affected"],
-            buildings_damaged=impact_data["buildings_damaged"],
-            facilities_at_risk=impact_data["facilities_at_risk"],
-            report_format=report_format,
-            max_depth_m=peak_depth_60m,
-            language=language,
-        )
-        nodes_status["ReporterAgent"] = "COMPLETED"
-        logs.append(f"[ReporterAgent] Generated {report_format} Situation Report — Numeric Hallucination Validator: PASS.")
+        sources = web_evidence.report_sources(web_intel)
+        if "EOAnalystAgent" in degraded:
+            report_text = (
+                f"SITUATION REPORT NOT GENERATED for {location}: EO analysis failed ({degraded['EOAnalystAgent']}). "
+                f"Flood area, depth and impact are unknown. Escalation {escalation} rests on hydrology only"
+                + (f": {'; '.join(escalation_reasons)}." if escalation_reasons else ".")
+            )
+            if sources:
+                report_text += format_official_sources(sources, web_intel["status"], web_intel.get("run_id"))
+            report = {"grounding_passed": None, "checks": {}}
+            nodes_status["ReporterAgent"] = "SKIPPED_EO_FAILED"
+            logs.append("[ReporterAgent] Skipped: no model figures to report because EO analysis failed.")
+        else:
+            report = self.rag_generator.generate_report_with_validation(
+                location=location,
+                area_sq_km=area_km2,
+                classification=eo_data.get("classification", "Flood Inundation"),
+                severity=severity,
+                population_affected=impact_data["population_affected"],
+                buildings_damaged=impact_data["buildings_damaged"],
+                facilities_at_risk=impact_data["facilities_at_risk"],
+                report_format=report_format,
+                max_depth_m=peak_depth_60m,
+                language=language,
+                official_sources=sources,
+                official_sources_status=web_intel["status"],
+                official_sources_run_id=web_intel.get("run_id"),
+            )
+            report_text = report["report_text"]
+            uncited = [name for name, ok in report["checks"].items() if not ok]
+            verdict = "PASS" if report["grounding_passed"] else f"FAIL ({', '.join(uncited)})"
+            nodes_status["ReporterAgent"] = "COMPLETED"
+            logs.append(f"[ReporterAgent] Generated {report_format} Situation Report — Numeric Hallucination Validator: {verdict}.")
 
         # ------------------------------------------------------------------
         # NODE 6: CommsAgent (CAP v1.2 Alert + HITL Approval Gate)
         # ------------------------------------------------------------------
-        nodes_status["CommsAgent"] = "RUNNING"
-        cap_payload = invoke_mcp(
-            "draft_cap_alert",
-            {
-                "location": location,
-                "lat": lat,
-                "lon": lon,
-                "severity": severity,
-                "area_sq_km": area_km2,
-                "max_depth_m": peak_depth_60m,
-                "language": language,
-            },
-        )
-        draft_id = f"hitl_{uuid.uuid4().hex[:8]}"
-        self._save_hitl_draft(
-            draft_id=draft_id,
-            run_id=run_id,
-            location=location,
-            lat=lat,
-            lon=lon,
-            severity=severity,
-            escalation_tier=escalation,
-            area_sq_km=area_km2,
-            max_depth_m=peak_depth_60m,
-            language=language,
-            cap_payload=cap_payload,
-        )
-        nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
-        logs.append(
-            f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script for +917678656930. "
-            f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
-        )
-
-        call_receipt = None
-        if auto_approve_hitl:
-            call_receipt = self.approve_and_dispatch_hitl(draft_id, approver="auto_demo_official", language=language)
-            nodes_status["CommsAgent"] = "DISPATCHED"
-            logs.append(f"[CommsAgent] HITL Approved -> Dispatched {language.upper()} Voice Call to +917678656930!")
+        cap_payload: Dict[str, Any] = {}
+        draft_id: Optional[str] = None
+        if escalation == "NONE":
+            nodes_status["CommsAgent"] = "SKIPPED_NO_ESCALATION"
+            logs.append("[CommsAgent] Escalation NONE: no CAP alert drafted, nothing queued for approval.")
+        else:
+            nodes_status["CommsAgent"] = "RUNNING"
+            cap_payload = invoke_mcp(
+                "draft_cap_alert",
+                {
+                    "location": location,
+                    "lat": lat,
+                    "lon": lon,
+                    "severity": severity,
+                    "area_sq_km": area_km2,
+                    "max_depth_m": peak_depth_60m,
+                    "language": language,
+                    "helplines": web_intel.get("verified_helplines", []),
+                },
+            )
+            draft_id = f"hitl_{uuid.uuid4().hex[:8]}"
+            saved = self._save_hitl_draft(
+                draft_id=draft_id,
+                run_id=run_id,
+                location=location,
+                lat=lat,
+                lon=lon,
+                severity=severity,
+                escalation_tier=escalation,
+                area_sq_km=area_km2,
+                max_depth_m=peak_depth_60m,
+                language=language,
+                cap_payload=cap_payload,
+                target_phone=target_phone,
+                web_intel=web_intel,
+            )
+            if not saved:
+                draft_id = None
+                degraded["CommsAgent"] = "the CAP draft could not be saved to the HITL queue"
+                nodes_status["CommsAgent"] = "FAILED"
+                logs.append("[CommsAgent] FAILED: the CAP draft could not be saved, so nothing is queued for approval.")
+            else:
+                nodes_status["CommsAgent"] = "AWAITING_HITL_APPROVAL"
+                logs.append(
+                    f"[CommsAgent] Drafted OASIS CAP v1.2 XML/JSON Alert ({cap_payload['identifier']}) & Bilingual Voice Script "
+                    f"{'for the requested recipient' if target_phone else 'with no recipient (approval will not place a call)'}. "
+                    f"Queued in HITL Approval Gate (Draft ID: {draft_id})."
+                )
 
         return {
             "run_id": run_id,
@@ -240,6 +477,7 @@ class MultiAgentIncidentOrchestrator:
             "lon": lon,
             "severity": severity,
             "escalation_tier": escalation,
+            "escalation_reasons": escalation_reasons,
             "report_format": report_format,
             "agent_nodes_status": nodes_status,
             "mcp_provenance": mcp_calls,
@@ -253,9 +491,11 @@ class MultiAgentIncidentOrchestrator:
             "evacuation": evac_data,
             "shelter_allocation": alloc_data,
             "situation_report": report_text,
+            "report_validation": {"grounding_passed": report["grounding_passed"], "checks": report["checks"]},
             "cap_alert": cap_payload,
             "hitl_draft_id": draft_id,
-            "call_receipt": call_receipt,
+            "web_intelligence": web_intel,
+            "degraded_nodes": degraded,
         }
 
     def _save_hitl_draft(
@@ -271,7 +511,9 @@ class MultiAgentIncidentOrchestrator:
         max_depth_m: float,
         language: str,
         cap_payload: Dict[str, Any],
-    ):
+        target_phone: Optional[str],
+        web_intel: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
@@ -280,8 +522,8 @@ class MultiAgentIncidentOrchestrator:
                 INSERT OR REPLACE INTO hitl_approvals (
                     draft_id, run_id, location, lat, lon, severity, escalation_tier,
                     area_sq_km, max_depth_m, target_phone, language, script_hi, script_en,
-                    cap_xml, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cap_xml, status, created_at, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     draft_id,
@@ -293,19 +535,22 @@ class MultiAgentIncidentOrchestrator:
                     escalation_tier,
                     area_sq_km,
                     max_depth_m,
-                    "+917678656930",
+                    target_phone,
                     language,
                     cap_payload["script_hi"],
                     cap_payload["script_en"],
                     cap_payload["xml"],
-                    "PENDING_OFFICIAL_APPROVAL",
+                    HITL_PENDING,
                     time.time(),
+                    json.dumps(web_intel, default=str) if web_intel else None,
                 ),
             )
             conn.commit()
             conn.close()
+            return True
         except Exception as e:
             print(f"[HITL Save Error] {e}")
+            return False
 
     @staticmethod
     def list_hitl_queue() -> List[Dict[str, Any]]:
@@ -314,7 +559,7 @@ class MultiAgentIncidentOrchestrator:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("SELECT * FROM hitl_approvals ORDER BY created_at DESC LIMIT 20")
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = [_row_view(r) for r in cur.fetchall()]
             conn.close()
             return rows
         except Exception:
@@ -323,47 +568,85 @@ class MultiAgentIncidentOrchestrator:
     @staticmethod
     def approve_and_dispatch_hitl(
         draft_id: str,
-        approver: str = "official",
-        language: str = "hi",
-        target_phone: str = "+917678656930",
+        approved_by: str,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Claims a pending (or failed) draft atomically, dispatches it once, and records the outcome.
+
+        Raises HitlDraftNotFound, HitlDraftNotPending (someone else holds or finished it), or
+        HitlDispatchFailed (the draft is left DISPATCH_FAILED and may be approved again).
+        """
+        approved_at = time.time()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,))
-        row = cur.fetchone()
-        if not row:
+        try:
+            claimed = conn.execute(
+                f"UPDATE hitl_approvals SET status = ?, approved_by = ?, approved_at = ?, dispatch_error = NULL "
+                f"WHERE draft_id = ? AND status IN ({','.join('?' * len(HITL_CLAIMABLE))})",
+                (HITL_DISPATCHING, approved_by, approved_at, draft_id, *HITL_CLAIMABLE),
+            ).rowcount == 1
+            conn.commit()
+            row = conn.execute("SELECT * FROM hitl_approvals WHERE draft_id = ?", (draft_id,)).fetchone()
+        finally:
             conn.close()
-            # Fallback if ad-hoc approval requested
-            res = execute_mcp_tool(
-                "dispatch_approved_alert",
-                {"phone_number": target_phone, "location": "Patna Flood Sector", "severity": "CRITICAL", "language": language},
-            )
-            return res["data"]
+        if row is None:
+            raise HitlDraftNotFound(draft_id)
+        if not claimed:
+            raise HitlDraftNotPending(draft_id, row["status"])
 
-        draft = dict(row)
-        use_lang = language or draft.get("language", "hi")
-        res = execute_mcp_tool(
-            "dispatch_approved_alert",
-            {
-                "phone_number": target_phone or draft.get("target_phone", "+917678656930"),
-                "location": draft["location"],
-                "severity": draft["severity"],
-                "language": use_lang,
-                "max_depth_m": draft.get("max_depth_m", 0.72),
-            },
-        )
-        cur.execute(
-            "UPDATE hitl_approvals SET status = 'APPROVED_AND_DISPATCHED', approved_by = ?, approved_at = ? WHERE draft_id = ?",
-            (approver, time.time(), draft_id),
-        )
-        conn.commit()
-        conn.close()
+        draft = _row_view(row)
+        lang = language or draft["language"]
+        target_phone = normalize_and_validate_phone(draft["target_phone"])
+        error: Optional[str] = None
+        # Legs that succeeded on an earlier attempt are kept and never re-sent on a retry.
+        legs: Dict[str, Any] = dict((draft["dispatch_receipt"] or {}).get("legs") or {})
+        if target_phone is None:
+            print(f"[HITL] Draft {draft_id} approved by {approved_by} has no valid recipient; nothing was sent.")
+            status = HITL_APPROVED_NO_RECIPIENT
+            receipt: Dict[str, Any] = {"status": "NO_RECIPIENT", "detail": "Draft has no valid recipient phone number; nothing was sent."}
+        else:
+            senders = (
+                ("voice", lambda: execute_mcp_tool("dispatch_approved_alert", {
+                    "phone_number": target_phone, "location": draft["location"], "severity": draft["severity"],
+                    "language": lang, "max_depth_m": draft["max_depth_m"],
+                })["data"]),
+                ("sns", lambda: sns_service.broadcast_flood_warning(
+                    location=draft["location"], severity_level=draft["severity"], water_depth_m=draft["max_depth_m"],
+                )),
+                ("polly", lambda: polly_service.synthesize_emergency_alert(
+                    f"HITL Approved Emergency Alert for {draft['location']}. Severity: {draft['severity']}.",
+                    language="hi-IN" if str(lang).lower().startswith("hi") else "en-IN",
+                )),
+            )
+            try:
+                for leg, send in senders:
+                    if leg not in legs:
+                        legs[leg] = send()
+                status = HITL_APPROVED
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"[:300]
+                status = HITL_DISPATCH_FAILED
+            receipt = legs.get("voice") or {"status": HITL_DISPATCH_FAILED, "error": error}
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute(
+                "UPDATE hitl_approvals SET status = ?, dispatch_receipt = ?, dispatch_error = ?, dispatched_at = ? "
+                "WHERE draft_id = ? AND status = ?",
+                (status, json.dumps({"legs": legs, "error": error}, default=str), error, time.time(), draft_id, HITL_DISPATCHING),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        if error:
+            raise HitlDispatchFailed(draft_id, error)
         return {
             "draft_id": draft_id,
-            "status": "APPROVED_AND_DISPATCHED",
-            "approved_by": approver,
-            "dispatch_receipt": res["data"],
+            "status": status,
+            "approved_by": approved_by,
+            "dispatch_receipt": receipt,
+            "aws_dispatch": {k: v for k, v in legs.items() if k != "voice"},
+            "draft": {**draft, "status": status, "approved_by": approved_by, "approved_at": approved_at},
         }
 
 

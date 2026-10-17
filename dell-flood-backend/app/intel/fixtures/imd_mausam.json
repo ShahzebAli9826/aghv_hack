@@ -1,0 +1,20 @@
+{
+  "_comment": "MOCK replay fixture. Shape of the TinyFish Fetch API response (POST api.fetch.tinyfish.ai/, OpenAPI 2026-10-16). Page text is illustrative.",
+  "fetch": {
+    "results": [
+      {
+        "url": "https://mausam.imd.gov.in/responsive/districtWiseWarningGIS.php",
+        "final_url": "https://mausam.imd.gov.in/responsive/districtWiseWarningGIS.php",
+        "title": "DW Warnings | India Meteorological Department",
+        "description": null,
+        "language": "en",
+        "format": "markdown",
+        "text": "# District Wise Warnings\nIssued at {{ts:-5h:dmy}} IST\nBihar: Siwan - Heavy rain at isolated places (Day 1). Gopalganj - No warning.\nAssam: Kamrup - Thunderstorm with lightning.",
+        "author": null,
+        "published_date": null,
+        "latency_ms": 812
+      }
+    ],
+    "errors": []
+  }
+}

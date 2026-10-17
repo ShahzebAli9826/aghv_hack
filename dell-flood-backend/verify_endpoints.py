@@ -73,8 +73,7 @@ def test_agent_cycle():
     payload = {
         "location": "Muzaffarpur",
         "lat": 26.1220,
-        "lon": 85.3620,
-        "phones": ["+917678656930"]
+        "lon": 85.3620
     }
     res = requests.post(f"{BASE_URL}/api/agent-cycle", json=payload)
     assert res.status_code == 200, f"Expected 200, got {res.status_code}"

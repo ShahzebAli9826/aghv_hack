@@ -54,7 +54,7 @@ class SQSAndSSMConfigService:
                 logger.warning(f"Boto3 SQS/SSM initialization skipped: {e}")
                 self.enabled = False
 
-    def enqueue_sos_packet(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def enqueue_sos_packet(self, payload: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
         """Enqueues a citizen SOS or hydrological anomaly message into Amazon SQS FIFO Queue."""
         msg_id = f"sqs-msg-{uuid.uuid4().hex[:10]}"
         dedup_id = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16] if "hashlib" in globals() else uuid.uuid4().hex[:16]
@@ -64,6 +64,9 @@ class SQSAndSSMConfigService:
             "enqueued_at_utc": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
         }
+        if dry_run:
+            return {"provider": "AWS_SQS_DRY_RUN", "message_id": None, "queue_url": self.queue_url,
+                    "payload": payload, "status": "DRY_RUN_NOT_ENQUEUED"}
         self._local_queue.insert(0, entry)
         self._local_queue = self._local_queue[:50]
 

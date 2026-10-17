@@ -1,0 +1,49 @@
+{
+  "_comment": "MOCK replay fixture. Shape of GET /v1/runs/{id} (TinyFish OpenAPI, 2026-10-16). Station values are illustrative, modelled on a SACHET CWC advisory for Darauli; not a live CWC reading.",
+  "run": {
+    "run_id": "mock_run_cwc_ffs_0001",
+    "status": "COMPLETED",
+    "goal": "(replay)",
+    "created_at": "{{ts:-20m}}",
+    "started_at": "{{ts:-20m}}",
+    "finished_at": "{{ts:-18m}}",
+    "num_of_steps": 14,
+    "result": {
+      "status": "success",
+      "stations": [
+        {
+          "station": "Darauli",
+          "river": "Ghaghra",
+          "district": "Siwan",
+          "water_level_m": 60.14,
+          "warning_level_m": 59.82,
+          "danger_level_m": 60.82,
+          "hfl_m": 61.74,
+          "trend": "steady",
+          "observed_at": "{{ts:-3h:dmy}}",
+          "source_url": "https://ffs.india-water.gov.in/"
+        },
+        {
+          "station": "Gangpur Siswan",
+          "river": "Ghaghra",
+          "district": "Siwan",
+          "water_level_m": 57.02,
+          "warning_level_m": 56.6,
+          "danger_level_m": 57.04,
+          "hfl_m": 58.01,
+          "trend": "falling",
+          "observed_at": "{{ts:-3h:dmy}}",
+          "source_url": "https://ffs.india-water.gov.in/"
+        }
+      ]
+    },
+    "output_schema": {},
+    "profile_attached": false,
+    "profile_id": null,
+    "error": null,
+    "streaming_url": null,
+    "browser_config": {"proxy_enabled": false, "proxy_country_code": null},
+    "video_url": null,
+    "steps": []
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "_comment": "MOCK replay fixture. The control room number matches what ndma.gov.in/en/contact-us showed on 2026-10-16; 1078 is listed here as an illustrative second line.",
+  "fetch": {
+    "results": [
+      {
+        "url": "https://ndma.gov.in/en/contact-us",
+        "final_url": "https://ndma.gov.in/en/contact-us",
+        "title": "Contact Us | NDMA",
+        "description": null,
+        "language": "en",
+        "format": "markdown",
+        "text": "National Disaster Management Authority\nControl Room: +91-11-26701728\nDisaster helpline: 1078",
+        "author": null,
+        "published_date": null,
+        "latency_ms": 501
+      }
+    ],
+    "errors": []
+  }
+}

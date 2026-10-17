@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import hmac
 import json
 import time
@@ -10,7 +11,49 @@ import secrets
 from typing import Dict, Any, Optional
 from fastapi import Header, HTTPException, Depends
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "aegis-crisis-command-secret-key-2026-ndma")
+
+def explicit_secret(name: str) -> Optional[str]:
+    """The env value, unless it is empty or still the .env.example placeholder."""
+    secret = os.getenv(name, "").strip()
+    return secret if secret and not secret.startswith("your_") else None
+
+
+def configured_workers() -> int:
+    """Worker count from WEB_CONCURRENCY or a --workers/-w flag (spawned workers inherit the parent's argv)."""
+    counts = [os.getenv("WEB_CONCURRENCY", "")]
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg in ("--workers", "-w") and i + 1 < len(argv):
+            counts.append(argv[i + 1])
+        elif arg.startswith("--workers="):
+            counts.append(arg.split("=", 1)[1])
+        elif arg.startswith("-w") and arg[2:].isdigit():
+            counts.append(arg[2:])
+    return max([int(c) for c in counts if c.strip().isdigit()] or [1])
+
+
+def require_shared_secret_for_workers(name: str) -> None:
+    workers = configured_workers()
+    if workers > 1:
+        raise RuntimeError(
+            f"{name} must be set explicitly when running more than one worker (WEB_CONCURRENCY/--workers = {workers}): "
+            "each worker would otherwise sign tokens with its own random secret and reject the others' tokens."
+        )
+
+
+def _load_jwt_secret() -> str:
+    secret = explicit_secret("JWT_SECRET_KEY")
+    if secret:
+        return secret
+    require_shared_secret_for_workers("JWT_SECRET_KEY")
+    print(
+        "[auth] JWT_SECRET_KEY is unset or a template placeholder; using a random per-process secret. Issued tokens stop working when the server restarts.",
+        file=sys.stderr,
+    )
+    return secrets.token_urlsafe(48)
+
+
+JWT_SECRET_KEY = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 TOKEN_EXPIRE_SECONDS = 86400 * 7  # 7 days
 
@@ -94,7 +137,7 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
         if cog_user:
             return {
                 "sub": cog_user.get("username", "official"),
-                "role": cog_user.get("role", "official"),
+                "role": cog_user.get("role", "citizen"),
                 "provider": cog_user.get("provider", "AMAZON_COGNITO"),
             }
     except Exception:
@@ -118,6 +161,10 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _strict_auth() -> bool:
+    return os.getenv("STRICT_AUTH", "true").strip().lower() != "false"
+
+
 async def get_current_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """FastAPI dependency extracting current user from Amazon Cognito Bearer JWT (Solves P1)."""
     if authorization and authorization.lower().startswith("bearer "):
@@ -126,19 +173,19 @@ async def get_current_user(authorization: Optional[str] = Header(default=None)) 
         if payload:
             return {
                 "username": payload.get("sub", "official"),
-                "role": payload.get("role", "official"),
+                "role": payload.get("role", "citizen"),
                 "auth_provider": payload.get("provider", "AMAZON_COGNITO_JWT"),
             }
-        if os.getenv("STRICT_AUTH", "false").lower() == "true":
+        if _strict_auth():
             raise HTTPException(status_code=401, detail="Invalid or expired Cognito JWT token")
-    if os.getenv("STRICT_AUTH", "false").lower() == "true":
+    if _strict_auth():
         raise HTTPException(status_code=401, detail="Authorization Bearer token required")
     return {"username": "demo_official", "role": "official", "auth_provider": "AMAZON_COGNITO_COMPATIBLE"}
 
 
 async def require_official(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """FastAPI RBAC dependency enforcing 'official' role (Solves P1)."""
-    if user.get("role") not in ("official", "admin"):
+    if str(user.get("role") or "").lower() not in ("official", "admin"):
         raise HTTPException(status_code=403, detail="Official disaster-management role required")
     return user
 
@@ -156,20 +203,15 @@ def slugify_location(location: str) -> str:
     return cleaned[:48] or "flood_report"
 
 
-def normalize_and_validate_phone(phone: Optional[str], default_demo: str = "+917678656930") -> str:
-    """
-    Validates E.164 phone format and defaults to the user's demonstration phone
-    +917678656930 (7678656930) when empty or during demo mode (Solves P2 & P34).
-    """
+def normalize_and_validate_phone(phone: Optional[str]) -> Optional[str]:
+    """Returns the E.164 form of phone (bare 10-digit numbers get +91), or None when it is empty or invalid."""
     if not phone or not str(phone).strip():
-        return default_demo
+        return None
     raw = re.sub(r"[\s\-\(\)]", "", str(phone).strip())
-    if raw == "7678656930" or raw.endswith("7678656930"):
-        return "+917678656930"
     if len(raw) == 10 and raw.isdigit():
         raw = f"+91{raw}"
     if not re.match(r"^\+[1-9]\d{7,14}$", raw):
-        return default_demo
+        return None
     return raw
 
 

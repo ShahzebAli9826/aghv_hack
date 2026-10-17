@@ -1,0 +1,12 @@
+{
+  "_comment": "MOCK replay fixture. TinyFish Search response shape (OpenAPI 2026-10-16). Headlines are illustrative.",
+  "search": {
+    "query": "Siwan flood",
+    "results": [
+      {"position": 1, "site_name": "The Hindu", "title": "Ghaghra rises near Siwan, low-lying villages flooded (mock)", "snippet": "Villages near Darauli in Siwan reported waterlogging on Thursday.", "url": "https://www.thehindu.com/mock/siwan-ghaghra", "date": "{{ts:-8h}}"},
+      {"position": 2, "site_name": "Unlisted", "title": "Siwan flood rumours", "snippet": "Unverified posts", "url": "https://rumours.example/siwan", "date": "{{ts:-2h}}"}
+    ],
+    "total_results": 2,
+    "page": 0
+  }
+}

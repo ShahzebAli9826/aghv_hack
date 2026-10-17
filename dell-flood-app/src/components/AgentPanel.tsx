@@ -32,10 +32,22 @@ import {
   AlertTriangle,
   Database,
 } from 'lucide-react-native';
-import { apiService, DetectionResult } from '../services/api';
-import { AppLanguage, t, DEFAULT_DEMO_PHONE_E164 } from '../utils/i18n';
+import { apiService, DetectionResult, DEMO_CALL_RECIPIENT } from '../services/api';
+import type { HitlEvidence } from '../services/webIntel';
+import WebIntelPanel from './WebIntelPanel';
+import HitlEvidenceSummary from './HitlEvidenceSummary';
+import { AppLanguage, t } from '../utils/i18n';
 
 const IS_COMPACT_LAYOUT = Platform.OS !== 'web' || Dimensions.get('window').width < 600;
+
+// react-native-web implements Alert.alert as a no-op.
+const notify = (title: string, message: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
 
 interface AgentPanelProps {
   lastResult: DetectionResult | null;
@@ -56,20 +68,32 @@ interface AgentResultSummary {
   confidence: number;
   population: number;
   buildings: number;
-  peak_depth_60m?: number;
-  evac_eta_min?: number;
-  hitl_queue_id?: number | null;
-  cap_xml?: string;
+  peak_depth_m: number | null;
+  escalation_tier: string;
+  hitl_draft_id: string | null;
+  input_provenance?: string;
+  depth_provenance?: string;
 }
 
+interface CycleTarget {
+  location: string;
+  lat: number;
+  lon: number;
+  state?: string;
+  district?: string;
+}
+
+const isHitlEvidence = (value: any): value is HitlEvidence =>
+  !!value && ['ATTACHED', 'STALE', 'NONE_AVAILABLE'].includes(value.status);
+
 const PRESET_DISTRICTS = [
-  { name: 'Patna District', lat: 25.6124, lon: 85.1376 },
-  { name: 'Golaghat', lat: 26.5239, lon: 93.9632 },
-  { name: 'Cachar', lat: 24.8333, lon: 92.7667 },
-  { name: 'Jorhat', lat: 26.7509, lon: 94.2037 },
-  { name: 'Majuli Island', lat: 26.9601, lon: 94.1802 },
-  { name: 'Charaideo', lat: 27.0270, lon: 94.8872 },
-  { name: 'Kaziranga', lat: 26.5775, lon: 93.1711 },
+  { name: 'Patna District', lat: 25.6124, lon: 85.1376, state: 'Bihar', district: 'Patna' },
+  { name: 'Golaghat', lat: 26.5239, lon: 93.9632, state: 'Assam', district: 'Golaghat' },
+  { name: 'Cachar', lat: 24.8333, lon: 92.7667, state: 'Assam', district: 'Cachar' },
+  { name: 'Jorhat', lat: 26.7509, lon: 94.2037, state: 'Assam', district: 'Jorhat' },
+  { name: 'Majuli Island', lat: 26.9601, lon: 94.1802, state: 'Assam', district: 'Majuli' },
+  { name: 'Charaideo', lat: 27.0270, lon: 94.8872, state: 'Assam', district: 'Charaideo' },
+  { name: 'Kaziranga', lat: 26.5775, lon: 93.1711, state: 'Assam', district: 'Golaghat' },
 ];
 
 const SIX_SPECIALIST_AGENTS = [
@@ -108,6 +132,17 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const [showMcpModal, setShowMcpModal] = useState<boolean>(false);
   const [awsSuiteRunning, setAwsSuiteRunning] = useState<boolean>(false);
   const [awsSuiteResult, setAwsSuiteResult] = useState<any | null>(null);
+  const [cycleError, setCycleError] = useState<string | null>(null);
+  const [cycleTarget, setCycleTarget] = useState<CycleTarget | null>(null);
+  const [approvedDraftIds, setApprovedDraftIds] = useState<string[]>([]);
+
+  const preset = PRESET_DISTRICTS.find((d) => d.name.toLowerCase() === locationName.trim().toLowerCase());
+  // A typed place has no known coordinates until a cycle geocodes it, so the panel waits for one.
+  const webIntelTarget: CycleTarget | null = preset
+    ? { location: preset.name, lat: preset.lat, lon: preset.lon, state: preset.state, district: preset.district }
+    : cycleTarget && cycleTarget.location === locationName
+    ? cycleTarget
+    : null;
 
   const loadGovernanceData = async () => {
     try {
@@ -128,8 +163,8 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const res = await apiService.runAwsMcpDiagnosticSuite(locationName || 'Patna District', activeLat, activeLon);
       setAwsSuiteResult(res?.data || res);
       await loadGovernanceData();
-    } catch (e) {
-      // Non-fatal
+    } catch (e: any) {
+      notify('AWS MCP suite failed', e?.message || 'The diagnostic suite request failed.');
     } finally {
       setAwsSuiteRunning(false);
     }
@@ -148,6 +183,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     setLogs([]);
     setReport('');
     setSummary(null);
+    setCycleError(null);
 
     try {
       let targetLat = activeLat;
@@ -174,8 +210,16 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       const response = await apiService.runAgentCycle(locationName, targetLat, targetLon, {
         report_format: reportFormat,
         language: lang,
+        phones: DEMO_CALL_RECIPIENT ? [DEMO_CALL_RECIPIENT] : [],
       });
 
+      setCycleTarget({
+        location: locationName,
+        lat: targetLat,
+        lon: targetLon,
+        state: matched?.state,
+        district: matched?.district,
+      });
       const logList = response.logs || response.result?.logs || [];
       const reportText = response.report || response.result?.report || '';
       const resultObj = response.result || response;
@@ -193,10 +237,11 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           confidence: resultObj.confidence || 0,
           population: resultObj.population || 0,
           buildings: resultObj.buildings || 0,
-          peak_depth_60m: resultObj.peak_depth_60m || 0,
-          evac_eta_min: resultObj.evac_eta_min || 0,
-          hitl_queue_id: resultObj.hitl_queue_id || null,
-          cap_xml: resultObj.cap_xml || '',
+          peak_depth_m: typeof resultObj.peak_depth_m === 'number' ? resultObj.peak_depth_m : null,
+          escalation_tier: resultObj.escalation_tier || 'NONE',
+          hitl_draft_id: resultObj.hitl_draft_id || null,
+          input_provenance: resultObj.input_provenance,
+          depth_provenance: resultObj.urnn?.depth_provenance,
         });
       } else {
         const trace = await apiService.getAgentTrace(locationName);
@@ -213,12 +258,17 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             confidence: trace.confidence || 0,
             population: trace.population || 0,
             buildings: trace.buildings || 0,
+            peak_depth_m: typeof trace.peak_depth_m === 'number' ? trace.peak_depth_m : null,
+            escalation_tier: trace.escalation_tier || 'NONE',
+            hitl_draft_id: trace.hitl_draft_id || null,
+            input_provenance: trace.input_provenance,
+            depth_provenance: trace.urnn?.depth_provenance,
           });
         }
       }
       await loadGovernanceData();
     } catch (e: any) {
-      Alert.alert('Execution Notice', e.message || 'Agent cycle completed with fallback telemetry.');
+      setCycleError(e?.message || 'Agent cycle failed.');
     } finally {
       setRunningAgent(false);
     }
@@ -249,44 +299,64 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     }
   };
 
+  const voiceCallRefusal = (s: AgentResultSummary | null): string | null => {
+    if (!s) return 'Run an agent cycle first; the call uses that cycle\'s figures.';
+    if (s.escalation_tier === 'NONE' || !s.hitl_draft_id) {
+      return 'The last cycle reported no flood escalation and drafted no alert, so there is nothing to call about.';
+    }
+    if (!approvedDraftIds.includes(s.hitl_draft_id)) {
+      return `Approve this cycle's HITL draft (${s.hitl_draft_id}) before placing a call.`;
+    }
+    return null;
+  };
+
   const handleDemoVoiceCall = async () => {
+    const refusal = voiceCallRefusal(summary);
+    if (refusal || !summary) {
+      notify('Voice call not placed', refusal || 'No cycle result.');
+      return;
+    }
     setCallingVoice(true);
     try {
-      const sev = summary?.severity || lastResult?.severity || 'HIGH';
-      const loc = summary?.location || locationName || 'Patna District';
-      const area = summary?.area_sq_km || lastResult?.area_sq_km || 3.4;
+      const { severity: sev, location: loc, area_sq_km: area, peak_depth_m: depth } = summary;
+      const extent = typeof area === 'number' && area > 0 ? ` over ${area.toFixed(2)} sq km` : '';
       const res = await apiService.triggerVoiceCall(
-        DEFAULT_DEMO_PHONE_E164,
-        `Emergency Alert for ${loc}: ${sev} flood risk over ${area} sq km.`,
+        DEMO_CALL_RECIPIENT,
+        `Emergency Alert for ${loc}: ${sev} flood risk${extent}.`,
         {
           location: loc,
           severity: sev,
           language: lang,
-          max_depth_m: summary?.peak_depth_60m || 1.2,
+          ...(typeof depth === 'number' ? { max_depth_m: depth } : {}),
         }
       );
-      const scriptText = res.script || res.script_spoken || res.message || 'Voice call dispatched.';
-      if (Platform.OS === 'web') {
-        window.alert(`📞 Outbound Voice Call to ${DEFAULT_DEMO_PHONE_E164} (${lang === 'hi' ? 'Hindi Polly.Aditi' : 'English alice'}):\n\n${scriptText}`);
-      } else {
-        Alert.alert(`📞 Outbound Call (${DEFAULT_DEMO_PHONE_E164})`, scriptText);
-      }
+      const scriptText = res.speech || res.message || 'Voice call dispatched.';
+      notify(
+        `📞 Outbound Voice Call to ${res.target} (${lang === 'hi' ? 'Hindi Polly.Aditi' : 'English alice'})`,
+        scriptText
+      );
     } catch (e: any) {
-      Alert.alert('Voice Gateway Notice', e?.message || 'Could not trigger voice call.');
+      notify('Voice Gateway Notice', e?.message || 'Could not trigger voice call.');
     } finally {
       setCallingVoice(false);
     }
   };
 
-  const handleApproveHitl = async (itemId: number) => {
+  const handleApproveHitl = async (itemId: string) => {
     try {
       const res = await apiService.approveHitlItem(itemId, lang);
-      if (res.status === 'SUCCESS') {
-        Alert.alert('HITL Broadcast Approved', `Emergency voice alert & CAP v1.2 dispatched to ${DEFAULT_DEMO_PHONE_E164}.`);
-        loadGovernanceData();
-      }
+      setApprovedDraftIds((ids) => (ids.includes(itemId) ? ids : [...ids, itemId]));
+      const target = res.dispatch_receipt?.target;
+      notify(
+        'HITL Broadcast Approved',
+        target
+          ? `Emergency voice alert & CAP v1.2 dispatched to ${target}.`
+          : 'CAP v1.2 alert approved. The draft has no valid recipient phone, so no call was placed.'
+      );
+      loadGovernanceData();
     } catch (e: any) {
-      Alert.alert('Approval Error', e?.message || 'Requires Official role token.');
+      notify('Approval Error', e?.message || 'Requires Official role token.');
+      loadGovernanceData();
     }
   };
 
@@ -540,10 +610,41 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           </View>
         </View>
 
+        {cycleError && (
+          <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
+            <View style={styles.cardHeaderRow}>
+              <AlertTriangle size={18} color="#dc2626" />
+              <Text style={[styles.cardHeaderTitle, { color: '#991b1b' }]}>Agent cycle failed</Text>
+            </View>
+            <Text style={{ fontSize: 12, color: '#7f1d1d' }}>{cycleError}</Text>
+          </View>
+        )}
+
         {/* ========================================================= */}
         {/* 2B. HUMAN-IN-THE-LOOP (HITL) EMERGENCY APPROVAL QUEUE      */}
         {/* ========================================================= */}
-        {hitlItems.filter((h) => h.status === 'PENDING_OFFICIAL_APPROVAL').length > 0 && (
+        {webIntelTarget && (
+          <WebIntelPanel
+            location={webIntelTarget.location}
+            lat={webIntelTarget.lat}
+            lon={webIntelTarget.lon}
+            state={webIntelTarget.state}
+            district={webIntelTarget.district}
+            aegisSummary={
+              summary
+                ? {
+                    severity: summary.severity,
+                    area_sq_km: summary.area_sq_km,
+                    gauge_status: summary.gauge_status,
+                    input_provenance: summary.input_provenance,
+                    depth_provenance: summary.depth_provenance,
+                  }
+                : undefined
+            }
+          />
+        )}
+
+        {hitlItems.filter((h) => h.status === 'PENDING' || h.status === 'DISPATCH_FAILED').length > 0 && (
           <View style={[styles.card, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}>
             <View style={styles.cardHeaderRow}>
               <AlertTriangle size={18} color="#dc2626" />
@@ -552,21 +653,32 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               </Text>
             </View>
             {hitlItems
-              .filter((h) => h.status === 'PENDING_OFFICIAL_APPROVAL')
+              .filter((h) => h.status === 'PENDING' || h.status === 'DISPATCH_FAILED')
               .slice(0, 3)
               .map((item) => (
-                <View key={item.id} style={styles.hitlRow}>
+                <View key={item.item_id} style={styles.hitlRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 12, fontWeight: '700', color: '#7f1d1d' }}>
-                      {item.location} — {item.severity} ({item.area_sq_km} km²)
+                      {item.location} — {item.severity}
                     </Text>
                     <Text style={{ fontSize: 10.5, color: '#991b1b' }}>
-                      Pop at Risk: {item.population_affected?.toLocaleString()} | Target: {DEFAULT_DEMO_PHONE_E164}
+                      Target: {item.target_phones?.length ? item.target_phones.join(', ') : 'no recipient'}
                     </Text>
+                    {item.status === 'DISPATCH_FAILED' && (
+                      <Text style={{ fontSize: 10.5, color: '#991b1b', fontWeight: '700' }}>
+                        Dispatch failed: {item.dispatch_error || 'unknown error'}. Approve again to retry.
+                      </Text>
+                    )}
+                    {isHitlEvidence(item.web_evidence) && <HitlEvidenceSummary data={item.web_evidence} />}
+                    {item.web_evidence?.status === 'FAILED' && (
+                      <Text style={{ fontSize: 10.5, color: '#991b1b' }}>
+                        Web evidence unavailable for this draft: {item.web_evidence.error}
+                      </Text>
+                    )}
                   </View>
                   <TouchableOpacity
                     style={styles.hitlApproveBtn}
-                    onPress={() => handleApproveHitl(item.id)}
+                    onPress={() => handleApproveHitl(item.item_id)}
                   >
                     <Text style={styles.hitlApproveText}>Approve & Dial</Text>
                   </TouchableOpacity>

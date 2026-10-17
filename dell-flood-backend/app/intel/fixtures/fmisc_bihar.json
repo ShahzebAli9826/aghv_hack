@@ -1,0 +1,21 @@
+{
+  "_comment": "MOCK replay fixture (historical scenario). FMISC publishes only 15 Jun to 15 Oct, so the planner skips it out of season before this is read.",
+  "run": {
+    "run_id": "mock_run_fmisc_0001",
+    "status": "COMPLETED",
+    "goal": "(replay)",
+    "created_at": "{{ts:-30m}}",
+    "started_at": "{{ts:-30m}}",
+    "finished_at": "{{ts:-28m}}",
+    "num_of_steps": 6,
+    "result": {
+      "status": "success",
+      "bulletin_url": "https://fmiscwrdbihar.gov.in/fmis/bulletin/Flood%20Bulletin.pdf",
+      "bulletin_date": "{{ts:-10h:dmy}}",
+      "season_closed": false
+    },
+    "error": null,
+    "streaming_url": null,
+    "steps": []
+  }
+}

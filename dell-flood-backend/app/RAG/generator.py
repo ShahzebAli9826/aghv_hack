@@ -1,7 +1,7 @@
 import os
 import re
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from app.RAG.vector_store import FloodVectorDB
 
 REPORT_FORMAT_TEMPLATES = {
@@ -10,6 +10,32 @@ REPORT_FORMAT_TEMPLATES = {
     "SDMA": "State Disaster Management Authority (SDMA Bihar/Assam) District Emergency Operations Brief (Sections: 1. River Basin & Embankment Status, 2. Affected Blocks & Ward Breakdown, 3. Relief Camp Activation, 4. SACHET CAP Alert Status)",
     "FIELD_BRIEF": "NDRF Tactical Field Commander Brief (Concise bulleted tactical card: Peak Depth, Boat Clearance Zones, Impassable Roads, Primary Shelter Coordinates)",
 }
+
+
+OFFICIAL_SOURCES_HEADING = "OFFICIAL SOURCES (RETRIEVED VIA TINYFISH)"
+
+
+def format_official_sources(sources: List[Dict[str, Any]], status: str, run_id: Optional[str] = None) -> str:
+    """Cited web evidence as its own section. Kept out of the LLM prompt and out of numeric grounding."""
+    lines = [
+        "",
+        "",
+        "------------------------------------------------------------",
+        OFFICIAL_SOURCES_HEADING,
+        "Context for the reviewing official. These are claims published by the listed sources, not Aegis",
+        "model output; none of the figures above come from them, and they cannot trigger an alert.",
+        f"Web evidence status: {status}" + (f" (run {run_id})" if run_id else ""),
+    ]
+    for i, src in enumerate(sources, 1):
+        label = "[MOCK REPLAY] " if src.get("mock") else ""
+        lines.append(f"{i}. {label}{src.get('claim')}")
+        lines.append(f"   Source: {src.get('source_name')} ({src.get('source_type')}, {src.get('grade')}): {src.get('source_url')}")
+        lines.append(
+            f"   Issued: {src.get('published_at') or 'not shown'} | Observed: {src.get('observed_at') or 'not shown'} "
+            f"| Retrieved: {src.get('retrieved_at')}"
+        )
+    lines.append("------------------------------------------------------------")
+    return "\n".join(lines)
 
 
 class SituationReportGenerator:
@@ -66,7 +92,10 @@ class SituationReportGenerator:
             "checks": checks,
         }
 
-    def generate_report(
+    def generate_report(self, *args, **kwargs) -> str:
+        return self.generate_report_with_validation(*args, **kwargs)["report_text"]
+
+    def generate_report_with_validation(
         self,
         location: str,
         area_sq_km: float,
@@ -78,7 +107,10 @@ class SituationReportGenerator:
         report_format: str = "NDMA",
         max_depth_m: float = 0.68,
         language: str = "en",
-    ) -> str:
+        official_sources: Optional[List[Dict[str, Any]]] = None,
+        official_sources_status: Optional[str] = None,
+        official_sources_run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Generates a grounded disaster situation report in the requested format (NDMA, UN_OCHA, SDMA, FIELD_BRIEF)
         and validates all numerical claims against verified pipeline telemetry (Solves P9, P17, P25, P28).
@@ -250,5 +282,9 @@ ALERT SEVERITY: {severity} | CLASSIFICATION: {classification}
    - Distribute potable water, ORS packets, and chlorine tablets per {fmt_key} SOP guidelines."""
 
         validated = self.validate_and_ground_numbers(raw_report, verified_stats)
-        return validated["report_text"]
+        # Appended after validation so a number quoted by a web source can never ground a model figure.
+        section = format_official_sources(official_sources, official_sources_status or "ATTACHED", official_sources_run_id) if official_sources else ""
+        validated["report_text"] += section
+        validated["official_sources_section"] = section.strip() or None
+        return validated
 

@@ -257,15 +257,30 @@ def run_full_evacuation_pipeline(
 def compute_elevation_evacuation_route(
     lat: float,
     lon: float,
+    destination: dict | None,
     depth_grids: dict | None = None,
     dem_grid=None,
 ) -> dict:
     """
     Computes an elevation-aware and time-varying U-RNN water-depth-aware evacuation route
-    from (lat, lon) to the nearest safe high-ground shelter (Solves P13 & P30).
+    from (lat, lon) to a known shelter. With no destination there is no route.
     """
-    dest_lat = round(float(lat) + 0.015, 5)
-    dest_lon = round(float(lon) + 0.012, 5)
+    if destination is None:
+        return {
+            "status": "no_verified_shelters",
+            "origin": {"lat": lat, "lon": lon},
+            "destination": None,
+            "distance_km": None,
+            "eta_minutes": None,
+            "route_type": None,
+            "dynamic_max_depth_at_arrival_m": None,
+            "static_max_depth_at_arrival_m": None,
+            "submerged_segments_bypassed": 0,
+            "waypoints": [],
+            "static_waypoints": [],
+        }
+    dest_lat = float(destination["lat"])
+    dest_lon = float(destination["lon"])
     router = DynamicEvacuationRouter()
     route_res = router.compute_route(
         origin_lat=float(lat),
@@ -278,12 +293,7 @@ def compute_elevation_evacuation_route(
     return {
         "status": "SUCCESS",
         "origin": {"lat": lat, "lon": lon},
-        "destination": {
-            "name": "High-Ground NDRF Relief Shelter",
-            "lat": dest_lat,
-            "lon": dest_lon,
-            "elevation_m": 64.5,
-        },
+        "destination": destination,
         "distance_km": route_res["distance_km"],
         "eta_minutes": route_res["eta_minutes"],
         "route_type": route_res["route_type"],
