@@ -68,7 +68,7 @@ During catastrophic flash flood events, incident commanders, emergency dispatche
  │ capture surface water at over-│ │ shortest straight-line paths, │ │ cannot know about sudden dam  │
  │ pass time. They cannot see    │ │ steering evacuees straight    │ │ releases, flash cloudbursts,  │
  │ soil saturation or sub-surface│ │ through low-elevation terrain │ │ bridge washouts, or official  │
- │ pooling over next 6 hours.    │ │ basins and flooded dips.      │ │ transit/railway closures.     │
+ │ pooling over next 60 minutes. │ │ basins and flooded dips.      │ │ transit/railway closures.     │
  └───────────────────────────────┘ └───────────────────────────────┘ └───────────────────────────────┘
 ```
 
@@ -77,7 +77,7 @@ During catastrophic flash flood events, incident commanders, emergency dispatche
 Aegis solves this by orchestrating a 4-tier multimodal intelligence stack:
 1. **Satellite Earth Observation:** Sentinel-1 SAR (penetrating storm clouds at night) fused with Sentinel-2 multispectral imagery via a **dual-encoder SegFormer MiT-B2** model.
 2. **Physical Terrain Hydrology:** Sub-meter **USGS 3DEP DEM elevation** and **Topographic Wetness Index (TWI)** via the **MirEye Earth API**, computing concave pooling sinks before rain crests.
-3. **4D Spatiotemporal ConvGRU Depth Nowcasting:** Forecasting continuous street-level water depth ($0.0\,\text{m} - 2.5\,\text{m}$) across +1h, +2h, +4h, and +6h horizons.
+3. **4D Spatiotemporal ConvGRU Depth Nowcasting:** Forecasting continuous street-level water depth ($0.0\,\text{m} - 2.5\,\text{m}$) across four horizons: Now (0m), +15m, +30m, and +60m.
 4. **TinyFish Autonomous Web Intelligence Agents:** Live headless browser agents crawling official government flood portals (CWC river gauges, IMD weather warnings, NDMA SACHET feeds, NHAI highway notices, NTES railway status, and local news) to extract real-time ground truth that satellites cannot see.
 
 ---
@@ -91,7 +91,7 @@ Aegis solves this by orchestrating a 4-tier multimodal intelligence stack:
   │                                        TACTICAL CLIENT APPLICATIONS                                         │
   │  React Native / Expo SDK 57 (Cross-Platform Mobile & Web)                                                   │
   │  • Citizen View: Real-time Inundation Map, Safe Shelter Corridors, Camera Ground Issue Reporting           │
-  │  • Commander View: 4D Nowcasting Player (+1h/+6h), TinyFish Web Intel HUD, HITL Dispatch, Voice Alerting    │
+  │  • Commander View: 4D Nowcast Player (0m/15m/30m/60m), TinyFish Web Intel HUD, HITL Dispatch, Voice Alerts  │
   └──────────────────────────────────────┬──────────────────────────────────────────────────────────────────────┘
                                          │ HTTP REST / SSE Stream
                                          ▼
@@ -311,10 +311,10 @@ Raw satellite segmentation only shows where water was at overpass time. Aegis co
 ### 4D Spatiotemporal ConvGRU Depth Nowcasting
 
 Aegis deploys a **Multi-Scale 3-Level Convolutional Gated Recurrent Unit (ConvGRU)** coupled with a **YOLOX Dual-Head** to forecast continuous flood water depth across **four forecast horizons**:
-- **+1 Hour:** Immediate flash surge boundary
-- **+2 Hours:** Local road submersions
-- **+4 Hours:** Peak neighborhood inundation
-- **+6 Hours:** Inundation recession and secondary pooling
+- **Now (0m):** Current baseline inundation from satellite observation and immediate ponding
+- **+15 Minutes:** Rapid flash-ponding accumulation in low-lying depressions
+- **+30 Minutes:** Expanding inundation wavefront across arterial roads and underpasses
+- **+60 Minutes:** Peak neighborhood inundation and critical corridor submersion ($>0.30\,\text{m}$)
 
 The network predicts flood water depth continuous contours ($0.0\,\text{m}$ to $2.5\,\text{m}$) and flow velocity vectors, rendering interactive depth contours over satellite hybrid tiles.
 
@@ -342,7 +342,7 @@ In a benchmark across **33 real-world flood clusters**, Aegis evaluated the safe
   - Sensitivity Projection             : 9.1% (under widened TWI variance)
 ```
 
-The system accepted an average detour of **+1.15 km** to ensure evacuees avoided road segments predicted to submerge within the next 2 hours.
+The system accepted an average detour of **+1.15 km** to ensure evacuees avoided road segments predicted to submerge within the 60-minute nowcast horizon.
 
 ---
 
@@ -383,7 +383,7 @@ Built using **React Native & Expo SDK 57**, the frontend provides a unified inte
  ┌──────────────────────────────────────────────┐ ┌──────────────────────────────────────────────┐
  │             CITIZEN INTERFACE                │ │         OFFICIAL COMMANDER INTERFACE         │
  │ • Interactive Real-Time Inundation Map       │ │ • Full 4D Spatiotemporal Nowcasting Player   │
- │ • Elevation-Weighted Evacuation Routes       │ │   (Interactive +1h/+2h/+4h/+6h Depth Sim)    │
+ │ • Elevation-Weighted Evacuation Routes       │ │   (Interactive 0m/+15m/+30m/+60m Depth Sim)  │
  │ • Safe High-Ground Emergency Shelter Pins    │ │ • TinyFish Autonomous Web Intel Dashboard    │
  │ • Offline Ground Issue Reporter              │ │ • Autonomous 6-Agent LangGraph Orchestrator  │
  │   (Native Camera & Gallery Photo Evidence)   │ │ • Human-in-the-Loop (HITL) Alert Approver    │
@@ -392,7 +392,7 @@ Built using **React Native & Expo SDK 57**, the frontend provides a unified inte
 ```
 
 - **Citizen Safety Interface:** Designed to prevent civilian panic and cognitive overload during an emergency. Civilians see verified flood zones, safe evacuation routes to higher-elevation relief shelters, and an offline-first issue reporting form with native camera capture and gallery upload. Advanced 4D temporal forecast scrubbers and agent triage tools are hidden from normal citizen views to eliminate misinformation.
-- **Official / Incident Commander Interface:** Gives disaster management personnel full operational oversight. Commanders switch to the `Official` role to unlock the **4D Spatiotemporal Nowcasting Player** (simulating water depth from +1h to +6h), **Agent Autonomy Panel**, **TinyFish Web Intelligence Crawler**, and the **Human-in-the-Loop (HITL) Alert Authorization Gateway**.
+- **Official / Incident Commander Interface:** Gives disaster management personnel full operational oversight. Commanders switch to the `Official` role to unlock the **4D Spatiotemporal Nowcasting Player** (simulating water depth across 0m, +15m, +30m, and +60m), **Agent Autonomy Panel**, **TinyFish Web Intelligence Crawler**, and the **Human-in-the-Loop (HITL) Alert Authorization Gateway**.
 
 ### Live Web Intelligence Tactical HUD (TinyFish)
 
@@ -431,7 +431,7 @@ The FastAPI backend exposes comprehensive REST endpoints for satellite detection
 | `GET` | `/` | Service health status, active models, and pipeline endpoints. |
 | `POST` | `/api/upload-geotiff` | Ingests SAR/Optical satellite GeoTIFF rasters for processing. |
 | `POST` | `/api/run-detection` | Runs SegFormer MiT-B2 flood segmentation on ingested imagery. |
-| `GET` | `/api/nowcast` | Returns 4-horizon continuous water depth nowcast + Dijkstra evacuation routes. |
+| `GET` | `/api/nowcast` | Returns 4-horizon continuous water depth nowcast (0m, +15m, +30m, +60m) + Dijkstra evacuation routes. |
 | `POST` | `/api/nowcast/simulate` | Simulates custom rainfall intensity and drainage efficiency scenarios. |
 | `POST` | `/api/aegis/twi/predict` | Computes Topographic Wetness Index (TWI) pooling sinks from DEM elevation. |
 | `POST` | `/api/aegis/evacuation/plan` | Generates elevation-weighted safe evacuation corridors. |
