@@ -408,7 +408,7 @@ The **Live Web Intelligence Panel** ([`WebIntelPanel.tsx`](file:///dell-flood-ap
 
 ### Automated Emergency Voice Call Alert System
 - **Twilio Voice Phone Dialer:** Aegis includes a direct voice alerting mechanism that triggers automated phone dispatches directly to official response lines (configured via `DEMO_CALL_RECIPIENT` in `.env`).
-- **Bilingual Speech Synthesis:** Synthesizes clear spoken audio in Indian English (`en-IN`) and Hindi (`hi-IN`), detailing inundation depth, affected landmarks, and designated safe shelter destinations.
+- **High-Impact Hindi Speech Synthesis:** Dispatches speak in natural, urgent Hindi via Amazon Polly Neural TTS (`Polly.Aditi`, `hi-IN`), broadcasting real-time water depths, critical hazard severity, and designated safe shelter locations to maximize lifesaving field comprehension during disasters.
 
 ### Standalone Android APK Release
 A pre-compiled, production-ready standalone `.apk` is built and ready for immediate deployment on field Android tablets and phones:

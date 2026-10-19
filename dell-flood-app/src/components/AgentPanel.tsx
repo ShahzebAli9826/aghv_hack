@@ -320,19 +320,22 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     try {
       const { severity: sev, location: loc, area_sq_km: area, peak_depth_m: depth } = summary;
       const extent = typeof area === 'number' && area > 0 ? ` over ${area.toFixed(2)} sq km` : '';
+      const depthHi = typeof depth === 'number' ? ` ${depth.toFixed(1)} मीटर तक` : '';
+      const hindiMsg = `सावधान! आपातकालीन बाढ़ चेतावनी। ${loc} क्षेत्र में ${sev} स्तर का बाढ़ का पानी${depthHi} तेजी से बढ़ रहा है। कृपया तुरंत सुरक्षित राहत शिविर की ओर जाएं।`;
+      const isHindi = lang === 'hi' || !lang;
       const res = await apiService.triggerVoiceCall(
         DEMO_CALL_RECIPIENT || '+917678656930',
-        `Emergency Alert for ${loc}: ${sev} flood risk${extent}.`,
+        isHindi ? hindiMsg : `Emergency Alert for ${loc}: ${sev} flood risk${extent}.`,
         {
           location: loc,
           severity: sev,
-          language: lang,
+          language: isHindi ? 'hi' : 'en',
           ...(typeof depth === 'number' ? { max_depth_m: depth } : {}),
         }
       );
       const scriptText = res.speech || res.message || 'Voice call dispatched.';
       notify(
-        `📞 Outbound Voice Call to ${res.target} (${lang === 'hi' ? 'Hindi Polly.Aditi' : 'English alice'})`,
+        `📞 Outbound Voice Call to ${res.target} (${isHindi ? 'Hindi Polly.Aditi' : 'English alice'})`,
         scriptText
       );
     } catch (e: any) {

@@ -68,15 +68,23 @@ def generate_multilingual_voice_script(
     depth_hi = f" {max_depth_m:.2f} मीटर तक" if max_depth_m is not None else ""
 
     if lang_code == "hi":
+        sev_map = {
+            "CRITICAL": "अत्यंत गंभीर और जानलेवा",
+            "HIGH": "गंभीर और खतरनाक",
+            "MODERATE": "मध्यम",
+            "LOW": "कम",
+        }
+        sev_hi = sev_map.get(str(severity).upper(), "अत्यंत गंभीर")
         prompt = (
-            f"Write an urgent, 25-word emergency flood voice call warning in pure HINDI (Devanagari script) "
-            f"alerting citizens near {location} that {severity} floodwater is rising{depth_en}. "
-            f"Instruct them to immediately evacuate to {shelter_name}. "
-            f"Return ONLY the spoken Hindi text without quotes, markdown, or stage directions."
+            f"Write an urgent, highly authoritative emergency flood alert voice script in fluent, natural HINDI (Devanagari script) "
+            f"alerting citizens near {location} that {sev_hi} floodwater is rising{depth_hi}. "
+            f"Instruct them immediately to evacuate to high ground relief shelter at {shelter_name}. "
+            f"Keep it under 30 words. Return ONLY the spoken Hindi text without quotes, markdown, or English words."
         )
         fallback_script = (
-            f"आपातकालीन बाढ़ चेतावनी! {location} क्षेत्र में {severity} स्तर की बाढ़ का पानी{depth_hi} बढ़ रहा है। "
-            f"कृपया तुरंत निकटतम सुरक्षित राहत शिविर {shelter_name} की ओर प्रस्थान करें।"
+            f"सावधान! यह राष्ट्रीय आपदा प्रबंधन एवं एजिस की ओर से आपातकालीन बाढ़ चेतावनी है। "
+            f"{location} क्षेत्र में {sev_hi} स्तर का बाढ़ का पानी{depth_hi} तेजी से बढ़ रहा है। "
+            f"अपनी जान बचाने के लिए तुरंत सुरक्षित ऊंचे राहत शिविर {shelter_name} की ओर जाएं।"
         )
     else:
         prompt = (
@@ -145,11 +153,12 @@ def build_safe_twiml_say(speech_text: str, language: str = "hi") -> str:
 
     if HAS_TWILIO and VoiceResponse is not None:
         resp = VoiceResponse()
+        resp.pause(length=1)
         resp.say(speech_text, voice=voice_id, language=voice_lang)
         return str(resp)
 
     escaped_msg = html.escape(str(speech_text), quote=True)
-    return f'<Response><Say voice="{voice_id}" language="{voice_lang}">{escaped_msg}</Say></Response>'
+    return f'<Response><Pause length="1"/><Say voice="{voice_id}" language="{voice_lang}">{escaped_msg}</Say></Response>'
 
 
 def trigger_voice_call(
@@ -180,13 +189,25 @@ def trigger_voice_call(
             "detail": "No valid recipient phone number; no call was placed.",
         }
 
-    speech_text = message or custom_message or generate_multilingual_voice_script(
-        location=location,
-        severity=severity,
-        language=lang_code,
-        max_depth_m=max_depth_m,
-        shelter_name=shelter_name,
-    )
+    # If language is Hindi (the default for maximum impact in India), ensure that
+    # any generic English message passed from client fallbacks is replaced with authentic Hindi speech.
+    has_devanagari = any('\u0900' <= c <= '\u097F' for c in str(message or custom_message or ""))
+    if lang_code == "hi" and not has_devanagari:
+        speech_text = generate_multilingual_voice_script(
+            location=location,
+            severity=severity,
+            language="hi",
+            max_depth_m=max_depth_m,
+            shelter_name=shelter_name,
+        )
+    else:
+        speech_text = message or custom_message or generate_multilingual_voice_script(
+            location=location,
+            severity=severity,
+            language=lang_code,
+            max_depth_m=max_depth_m,
+            shelter_name=shelter_name,
+        )
     twiml_xml = build_safe_twiml_say(speech_text, language=lang_code)
 
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
