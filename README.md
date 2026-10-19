@@ -407,7 +407,7 @@ The **Live Web Intelligence Panel** ([`WebIntelPanel.tsx`](file:///dell-flood-ap
 - **Road & Rail Impact Matrix:** Displays blocked national highways, bridge washouts, and diverted train routes.
 
 ### Automated Emergency Voice Call Alert System
-- **Twilio Voice Phone Dialer:** Aegis includes a direct voice alerting mechanism that triggers automated phone dispatches directly to official response lines (pre-configured to field responder `+917678656930`).
+- **Twilio Voice Phone Dialer:** Aegis includes a direct voice alerting mechanism that triggers automated phone dispatches directly to official response lines (configured via `DEMO_CALL_RECIPIENT` in `.env`).
 - **Bilingual Speech Synthesis:** Synthesizes clear spoken audio in Indian English (`en-IN`) and Hindi (`hi-IN`), detailing inundation depth, affected landmarks, and designated safe shelter destinations.
 
 ### Standalone Android APK Release
@@ -447,7 +447,7 @@ The FastAPI backend exposes comprehensive REST endpoints for satellite detection
 | `POST` | `/api/report-flood` | Submits citizen ground observation with GPS coordinates and native photo evidence. |
 | `GET` | `/api/complaints/list` | Returns crowdsourced complaints and safe emergency shelter locations. |
 | `POST` | `/api/complaints/resolve` | Marks a citizen incident report as resolved by field responders. |
-| `POST` | `/api/alerts/voice-call` | Triggers an automated emergency voice phone call to designated responder (`+917678656930`). |
+| `POST` | `/api/alerts/voice-call` | Triggers an automated emergency voice phone call to designated responder line. |
 | `GET` | `/api/hitl/queue` | Lists pending disaster action drafts awaiting official commander approval. |
 | `POST` | `/api/hitl/approve` | Approves a pending draft and dispatches multi-channel voice, push, and SMS alerts. |
 
@@ -661,7 +661,7 @@ TINYFISH_MAX_STEPS_PER_RUN=25
 TWILIO_ACCOUNT_SID=your_twilio_account_sid_here
 TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
 TWILIO_PHONE_NUMBER=your_twilio_phone_number_here
-DEMO_CALL_RECIPIENT=+917678656930
+DEMO_CALL_RECIPIENT=+91XXXXXXXXXX
 
 # ========================================================
 # OPTIONAL MAP & MODEL SERVICES (UNBREAKABLE LOCAL FALLBACKS)
