@@ -67,17 +67,12 @@ export const ChatbotPanel: React.FC<ChatbotPanelProps> = ({
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
 
   const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     scrollViewRef.current?.scrollToEnd({ animated: true });
   }, [messages, isLoading]);
-
-  const toggleToolExpand = (id: string) => {
-    setExpandedTools(prev => ({ ...prev, [id]: !prev[id] }));
-  };
 
   const handleSend = async (customText?: string) => {
     const textToSend = (customText || inputText).trim();
@@ -189,49 +184,6 @@ export const ChatbotPanel: React.FC<ChatbotPanelProps> = ({
               )}
 
               <View style={[styles.bubble, isUser ? styles.userBubble : styles.botBubble]}>
-                {/* Tool Calls Execution Pill */}
-                {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
-                  <View style={styles.toolCallsContainer}>
-                    {msg.toolCalls.map((tc, idx) => {
-                      const toolKey = `${msg.id}-tool-${idx}`;
-                      const isExpanded = !!expandedTools[toolKey];
-                      return (
-                        <View key={toolKey} style={styles.toolCard}>
-                          <TouchableOpacity
-                            style={styles.toolCardHeader}
-                            onPress={() => toggleToolExpand(toolKey)}
-                            activeOpacity={0.8}
-                          >
-                            <View style={styles.toolCardLeft}>
-                              <Layers size={13} color="#059669" />
-                              <Text style={styles.toolNameText}>
-                                Tool: <Text style={styles.toolNameHighlight}>{tc.tool_name}</Text>
-                              </Text>
-                            </View>
-                            {isExpanded ? (
-                              <ChevronUp size={13} color="#64748b" />
-                            ) : (
-                              <ChevronDown size={13} color="#64748b" />
-                            )}
-                          </TouchableOpacity>
-                          {isExpanded && (
-                            <View style={styles.toolDetails}>
-                              <Text style={styles.toolArgsText}>
-                                Args: {JSON.stringify(tc.args, null, 2)}
-                              </Text>
-                              {tc.result_summary ? (
-                                <Text style={styles.toolResultText}>
-                                  Summary: {tc.result_summary}
-                                </Text>
-                              ) : null}
-                            </View>
-                          )}
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-
                 {/* Message Text */}
                 <Text style={[styles.messageText, isUser ? styles.userText : styles.botText]}>
                   {msg.text}
@@ -255,21 +207,6 @@ export const ChatbotPanel: React.FC<ChatbotPanelProps> = ({
                       View Location on Map ({msg.geocodedCoords[0].toFixed(3)}°, {msg.geocodedCoords[1].toFixed(3)}°)
                     </Text>
                   </TouchableOpacity>
-                )}
-
-                {/* Citation Badges */}
-                {!isUser && msg.citations && msg.citations.length > 0 && (
-                  <View style={styles.citationsContainer}>
-                    <Text style={styles.citationsLabel}>Official Data Sources:</Text>
-                    <View style={styles.citationChipsWrap}>
-                      {msg.citations.map((c, i) => (
-                        <View key={i} style={styles.citationChip}>
-                          <CheckCircle2 size={11} color="#059669" />
-                          <Text style={styles.citationText}>{c}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
                 )}
 
                 <Text style={[styles.timeText, isUser ? styles.userTimeText : styles.botTimeText]}>

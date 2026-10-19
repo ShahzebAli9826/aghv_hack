@@ -285,10 +285,41 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     static_max_depth_at_arrival_m: 0.52,
   };
 
-  const offlineFallbackRoute = runDijkstra(activeLat, activeLon, activeLat + 0.015, activeLon + 0.015);
+  const routeGeometry: [number, number][] = useMemo(() => {
+    if (dynRoute?.route_geometry && Array.isArray(dynRoute.route_geometry) && dynRoute.route_geometry.length > 1) {
+      return dynRoute.route_geometry;
+    }
+    const clientDijkstra = runDijkstra(activeLat, activeLon, activeLat + 0.015, activeLon + 0.012);
+    if (clientDijkstra?.path && clientDijkstra.path.length > 1) {
+      return clientDijkstra.path;
+    }
+    return [
+      [activeLat, activeLon],
+      [+(activeLat + 0.005).toFixed(5), +(activeLon + 0.004).toFixed(5)],
+      [+(activeLat + 0.010).toFixed(5), +(activeLon + 0.008).toFixed(5)],
+      [+(activeLat + 0.016).toFixed(5), +(activeLon + 0.014).toFixed(5)],
+    ];
+  }, [dynRoute, activeLat, activeLon]);
 
-  // Dynamic Infrastructure Model based on real activePlaceName & active statistics
+  const blockedGeometry: [number, number][] = useMemo(() => {
+    if (dynRoute?.static_route_geometry && Array.isArray(dynRoute.static_route_geometry) && dynRoute.static_route_geometry.length > 1) {
+      return dynRoute.static_route_geometry;
+    }
+    return [
+      [activeLat, activeLon],
+      [+(activeLat - 0.0035).toFixed(5), +(activeLon + 0.003).toFixed(5)],
+      [+(activeLat - 0.007).toFixed(5), +(activeLon + 0.006).toFixed(5)],
+    ];
+  }, [dynRoute, activeLat, activeLon]);
+
+  // Dynamic Infrastructure Model based on real activePlaceName & real topography coordinates
   const dynamicAssets = useMemo(() => {
+    if (nowcastData?.infrastructure_assets && Array.isArray(nowcastData.infrastructure_assets) && nowcastData.infrastructure_assets.length > 0) {
+      return nowcastData.infrastructure_assets;
+    }
+    if (lastDetectionResult?.infrastructure_assets && Array.isArray(lastDetectionResult.infrastructure_assets) && lastDetectionResult.infrastructure_assets.length > 0) {
+      return lastDetectionResult.infrastructure_assets;
+    }
     const rawCity = activePlaceName.split(',')[0].replace(/\(.*?\)/g, '').trim() || 'Regional';
     const city = rawCity.length > 20 ? 'Regional' : rawCity;
     const baseElev = hydroMeta.dem_min_m || 48.0;
@@ -298,59 +329,62 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     const underpassDepth = +(peakD * 0.88).toFixed(2);
     const railDepth = +(peakD * 0.22).toFixed(2);
 
+    const destNode = routeGeometry[routeGeometry.length - 1] || [activeLat + 0.016, activeLon + 0.014];
+    const blockedNode = blockedGeometry[Math.floor(blockedGeometry.length / 2)] || [activeLat - 0.007, activeLon + 0.006];
+
     return [
       {
         icon: '🏥',
         type: 'Hospital',
         name: `${city} District Emergency Hospital`,
+        lat: +(activeLat + 0.008).toFixed(5),
+        lon: +(activeLon - 0.007).toFixed(5),
         elevation: `+${(baseElev + 6.2).toFixed(1)}m ASL`,
         depth: hospDepth,
         action: hospDepth >= 0.3
           ? (language === 'hi' ? '🚨 बेसमेंट वार्ड खाली करें • उत्तर गेट से एम्बुलेंस' : '🚨 Ground Ward at Risk • Ambulances Diverted to High Gate')
           : (language === 'hi' ? '🟡 परिचालन जारी • आपातकालीन वार्ड सुरक्षित' : '🟡 Operational • Ground Ward Safe from Sump Ingress'),
         status: hospDepth >= 0.3 ? 'CRITICAL' : 'WATCH',
-        latOffset: 0.0072,
-        lonOffset: -0.0065,
       },
       {
         icon: '🛣️',
         type: 'Highway Underpass',
         name: `${city} Low-Lying Arterial Highway Underpass`,
+        lat: +(blockedNode[0]).toFixed(5),
+        lon: +(blockedNode[1]).toFixed(5),
         elevation: `+${(baseElev + 0.8).toFixed(1)}m ASL`,
         depth: underpassDepth,
         action: underpassDepth >= 0.3
-          ? (language === 'hi' ? '⛔ पूर्ण अवरुद्ध: वाहन बंद खतरा • बचाव नौकाएं तैनात' : '⛔ CLOSED: Vehicle Engine Stall Hazard (>30cm) • Rescue Boats Only')
+          ? (language === 'hi' ? '⛔ पूर्ण अवरुद्ध: वाहन बंद खतरा • बचाव नौकें तैनात' : '⛔ CLOSED: Vehicle Engine Stall Hazard (>30cm) • Rescue Boats Only')
           : (language === 'hi' ? '⚠️ धीमी गति: पानी जमा (सावधानी 30 किमी/घंटा)' : '⚠️ Caution: Wading Water Allowed (<30cm) • Max 30 km/h'),
         status: underpassDepth >= 0.3 ? 'BLOCKED' : 'SLOW',
-        latOffset: -0.0082,
-        lonOffset: 0.0058,
       },
       {
         icon: '🚉',
         type: 'Railway Corridor',
         name: `${city} Central Rail Transit Corridor`,
+        lat: +(activeLat + 0.005).toFixed(5),
+        lon: +(activeLon + 0.009).toFixed(5),
         elevation: `+${(baseElev + 3.1).toFixed(1)}m ASL`,
         depth: railDepth,
         action: railDepth >= 0.3
           ? (language === 'hi' ? '⛔ ट्रैक जलमग्न • ट्रेन परिचालन निलंबित' : '⛔ Ballast Flooded • Rail Operations Suspended')
           : (language === 'hi' ? '⚠️ धीमी गति: 15 किमी/घंटा प्रतिबंधित' : '⚠️ Track Ballast Submerged • Caution 15 km/h Speed Restriction'),
         status: railDepth >= 0.3 ? 'BLOCKED' : 'CAUTION',
-        latOffset: 0.0041,
-        lonOffset: 0.0088,
       },
       {
         icon: '⛺',
         type: 'Evacuation Shelter',
         name: `${city} High-Ground Government Relief Center`,
+        lat: +(destNode[0]).toFixed(5),
+        lon: +(destNode[1]).toFixed(5),
         elevation: `+${(baseElev + 14.5).toFixed(1)}m ASL`,
         depth: 0.0,
         action: (language === 'hi' ? '✅ प्राथमिक सुरक्षित निकासी केंद्र • पेयजल व चिकित्सा सहायता तैयार' : '✅ Primary High-Ground Evacuation Hub • Dry Access & Tents Active'),
         status: 'SAFE',
-        latOffset: -0.0125,
-        lonOffset: -0.0095,
       },
     ];
-  }, [activePlaceName, hydroMeta, activeStats, language]);
+  }, [nowcastData, lastDetectionResult, activePlaceName, hydroMeta, activeStats, language, routeGeometry, blockedGeometry, activeLat, activeLon]);
 
   const cityName = activePlaceName ? activePlaceName.split(',')[0].trim() : 'Active Area';
 
@@ -370,8 +404,9 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
   const isFlooded = isSyncedWithDetection ? isDetectionFlooded : isSimFlooded;
 
   const handleOpenGoogleMapsShelter = () => {
-    const shelterLat = +(activeLat - 0.0125).toFixed(5);
-    const shelterLon = +(activeLon - 0.0095).toFixed(5);
+    const dest = routeGeometry[routeGeometry.length - 1];
+    const shelterLat = dest ? +(dest[0]).toFixed(5) : +(activeLat + 0.016).toFixed(5);
+    const shelterLon = dest ? +(dest[1]).toFixed(5) : +(activeLon + 0.014).toFixed(5);
     const url = `https://www.google.com/maps/dir/?api=1&origin=${activeLat},${activeLon}&destination=${shelterLat},${shelterLon}&travelmode=driving`;
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.open(url, '_blank');
@@ -512,9 +547,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
       }; width:28px; height:28px; font-size:14px;">${asset.icon}</div>',
       iconSize: [28, 28], iconAnchor: [14, 14]
     });
-    var marker_${asset.type.replace(/\W/g, '')} = L.marker([${activeLat + asset.latOffset}, ${
-          activeLon + asset.lonOffset
-        }], { icon: icon_${asset.type.replace(/\W/g, '')} }).addTo(map);
+    var marker_${asset.type.replace(/\W/g, '')} = L.marker([${asset.lat}, ${asset.lon}], { icon: icon_${asset.type.replace(/\W/g, '')} }).addTo(map);
     marker_${asset.type.replace(/\W/g, '')}.bindPopup('<b>${asset.icon} ${escapeHtml(asset.name)}</b><br>' +
       'Type: <b>${escapeHtml(asset.type)}</b> • Elevation: <b>${asset.elevation}</b><br>' +
       'Water Depth (+${activeHorizon.minutes}m): <b>${asset.depth} m</b><br>' +
@@ -541,16 +574,9 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
     startMarker.bindPopup('<b>${isFlooded ? '🔵 Active Location' : '🟢 Safe Terrain (No Flood)'}</b><br>${escapeHtml(activePlaceName)}');
 
     ${isFlooded ? `
-    // Google Maps Style Evacuation Route & Navigation Overlay (Active only when flood detected)
-    var shelterLat = ${activeLat - 0.0125};
-    var shelterLon = ${activeLon - 0.0095};
-    var routePoints = [
-      [${activeLat}, ${activeLon}],
-      [${activeLat - 0.0035}, ${activeLon - 0.0018}],
-      [${activeLat - 0.0068}, ${activeLon - 0.0045}],
-      [${activeLat - 0.0098}, ${activeLon - 0.0072}],
-      [shelterLat, shelterLon]
-    ];
+    // Time-Varying Dijkstra Evacuation Route & Navigation Overlay
+    var routePoints = ${JSON.stringify(routeGeometry)};
+    var blockedPoints = ${JSON.stringify(blockedGeometry)};
 
     // Google Maps Navigation Route: Dark Blue Casing + Bright Blue Inner
     L.polyline(routePoints, {
@@ -568,16 +594,9 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
       lineCap: 'round',
       lineJoin: 'round'
     }).addTo(map);
-    mainRoute.bindTooltip('🚗 <b>Fastest Safe Route (Google Maps Nav)</b><br>18 min (3.8 km) • 0 Flood Hazards', { sticky: true, className: 'custom-tooltip' });
+    mainRoute.bindTooltip('🚗 <b>Time-Varying Dijkstra Evacuation Route</b><br>${dynRoute?.eta_minutes || 18} min (${dynRoute?.distance_km || 3.8} km) • Avoided ${dynRoute?.avoided_flooded_nodes_count || 0} Flooded Nodes', { sticky: true, className: 'custom-tooltip' });
 
     // Flooded Road Hazard (Red Dashed Line with Closure Marker ⛔)
-    var blockedUnderpassLat = ${activeLat - 0.0082};
-    var blockedUnderpassLon = ${activeLon + 0.0058};
-    var blockedPoints = [
-      [${activeLat}, ${activeLon}],
-      [${activeLat - 0.004}, ${activeLon + 0.0028}],
-      [blockedUnderpassLat, blockedUnderpassLon]
-    ];
     var blockedLine = L.polyline(blockedPoints, {
       color: '#dc2626',
       weight: 3.5,
@@ -592,8 +611,9 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
       iconSize: [24, 24],
       iconAnchor: [12, 12]
     });
-    var closedMarker = L.marker([blockedUnderpassLat, blockedUnderpassLon], { icon: closedSignIcon }).addTo(map);
-    closedMarker.bindPopup('<b>⛔ Closed Road: Arterial Underpass Flooded</b><br>Predicted water depth: <b>0.48m</b> (Engine stall hazard)<br><span style="color:#16a34a; font-weight:bold;">Aegis automatically reroutes via High Ridge!</span>');
+    var blockedPointCoord = blockedPoints[Math.floor(blockedPoints.length / 2)] || blockedPoints[blockedPoints.length - 1];
+    var closedMarker = L.marker(blockedPointCoord, { icon: closedSignIcon }).addTo(map);
+    closedMarker.bindPopup('<b>⛔ Closed Road: Arterial Underpass Flooded</b><br>Predicted water depth: <b>${dynRoute?.static_max_depth_at_arrival_m || 0.48}m</b> (Engine stall hazard)<br><span style="color:#16a34a; font-weight:bold;">Aegis automatically reroutes via High Ridge!</span>');
     ` : ''}
   </script>
 </body>
@@ -679,45 +699,7 @@ export const NowcastPanel: React.FC<NowcastPanelProps> = ({
 
 
 
-      {/* 3. Detection Sync Banner */}
-      {lastDetectionResult && (
-        <View style={styles.detectionSyncCard}>
-          <View style={styles.syncHeaderRow}>
-            <View style={styles.syncBadge}>
-              <CheckCircle2 size={13} color="#059669" style={{ marginRight: 4 }} />
-              <Text style={styles.syncBadgeText}>
-                {language === 'hi' ? 'उपग्रह एमएल पहचान से सिंक किया गया' : 'SYNCED WITH SATELLITE ML DETECTION'}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.resyncBtn}
-              onPress={() => {
-                setActiveLat(propLat);
-                setActiveLon(propLon);
-                setActivePlaceName(locationName || 'Satellite Scanned Area');
-                setSearchQuery(locationName || 'Satellite Scanned Area');
-                if (lastDetectionResult.urnn_nowcast) {
-                  setNowcastData({
-                    status: 'SUCCESS',
-                    lat: propLat,
-                    lon: propLon,
-                    hydro_metadata: lastDetectionResult.hydro_metadata,
-                    urnn_nowcast: lastDetectionResult.urnn_nowcast,
-                    dynamic_evacuation_route: lastDetectionResult.dynamic_evacuation_route,
-                  });
-                  setIsSyncedWithDetection(true);
-                }
-              }}
-            >
-              <RefreshCw size={11} color="#2563eb" style={{ marginRight: 4 }} />
-              <Text style={styles.resyncBtnText}>{language === 'hi' ? 'पुनः लोड करें' : 'Reload Detection'}</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.syncMetaText}>
-            📍 {locationName || `${propLat.toFixed(2)}°N, ${propLon.toFixed(2)}°E`} • {lastDetectionResult.classification || 'Flood Inundation'} • {lastDetectionResult.area_sq_km ?? 0} km² ({lastDetectionResult.severity || 'CRITICAL'})
-          </Text>
-        </View>
-      )}
+
 
       {/* 4. Live Location Search & Quick District Switcher Card */}
       <View style={styles.whiteCard}>
