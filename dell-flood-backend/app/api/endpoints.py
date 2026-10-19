@@ -1825,7 +1825,7 @@ def run_pipeline_task(job_id: str, lat: float, lon: float, cloud_cover: float = 
             depth_grids_64=urnn_nowcast["depth_grids_64"],
             dem=dem,
             meta=hydro_meta,
-            location_name=location_name,
+            location_name="",
         )
         jobs[job_id]["steps_completed"].append({
             "step": "dynamic_routing",

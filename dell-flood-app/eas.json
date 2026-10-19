@@ -10,6 +10,9 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://courier-critical-brick-generate.trycloudflare.com/api"
+      },
       "android": {
         "buildType": "apk"
       }

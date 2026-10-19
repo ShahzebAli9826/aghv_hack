@@ -3,8 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const DEFAULT_API_URL = Platform.select({
   web: typeof window !== 'undefined' && window.location && window.location.hostname ? `http://${window.location.hostname}:8000/api` : 'http://localhost:8000/api',
-  android: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'http://192.168.1.4:8000/api',
-  default: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'http://192.168.1.4:8000/api'
+  android: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'https://courier-critical-brick-generate.trycloudflare.com/api',
+  default: process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/$/, '') || 'https://courier-critical-brick-generate.trycloudflare.com/api'
 }) as string;
 
 // Test number for the demo voice-call buttons. Defaulting to 7678656930 as configured.
@@ -125,7 +125,7 @@ export const apiService = {
       } else {
         const savedUrl = await AsyncStorage.getItem('aegis_api_url');
         if (savedUrl) {
-          const obsoleteHosts = ['10.142.212.139', '10.243.140.156', '192.168.0.171'];
+          const obsoleteHosts = ['10.142.212.139', '10.243.140.156', '192.168.0.171', '192.168.1.4', '192.168.1.7'];
           const migratedUrl = obsoleteHosts.some(host => savedUrl.includes(host))
             ? DEFAULT_API_URL
             : savedUrl;
