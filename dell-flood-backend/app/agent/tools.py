@@ -177,7 +177,8 @@ def trigger_voice_call(
     LLM warning script. An empty or invalid number places no call (Solves P2 & P34).
     """
     target_phone = normalize_and_validate_phone(phone_number or os.getenv("DEMO_CALL_RECIPIENT") or "+917678656930")
-    lang_code = "hi" if str(language).lower().startswith("hi") else "en"
+    # All Twilio emergency call alerts speak in authentic Hindi (Polly.Aditi) for maximum impact in disaster response
+    lang_code = "hi" if (not language or str(language).lower().startswith("hi") or language == "en") else "en"
     if target_phone is None:
         print(f"[Twilio IVR] No valid recipient ({phone_number!r}); no call placed.")
         return {

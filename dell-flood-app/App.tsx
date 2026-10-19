@@ -439,15 +439,24 @@ export default function App() {
   };
 
   const handleVoiceCallTrigger = async (phoneNum: string, severity: string, locationName?: string) => {
-    const alertMessage = `Emergency Alert: Active ${severity} water levels verified near your location. Route paths are updated. Please evacuate to the nearest safe shelter immediately.`;
+    const displayPlace = locationName || `${activeLat.toFixed(2)}°N, ${activeLon.toFixed(2)}°E`;
+    const sevUpper = (severity || 'CRITICAL').toUpperCase();
+    const sevHiMap: Record<string, string> = {
+      'CRITICAL': 'अत्यंत गंभीर और जानलेवा',
+      'HIGH': 'गंभीर',
+      'MODERATE': 'मध्यम',
+      'LOW': 'कम स्तर'
+    };
+    const sevHi = sevHiMap[sevUpper] || 'गंभीर';
+    const alertMessage = `सावधान! यह राष्ट्रीय आपदा प्रतिक्रिया बल और एजिस बाढ़ नियंत्रण कक्ष से आपातकालीन चेतावनी है। ${displayPlace} क्षेत्र में ${sevHi} स्तर का बाढ़ जलस्तर बढ़ रहा है। कृपया तुरंत निकटतम सुरक्षित राहत शिविर की ओर प्रस्थान करें।`;
     try {
       const res = await apiService.triggerVoiceCall(
         phoneNum,
         alertMessage,
         {
-          location: locationName || `${activeLat.toFixed(2)}N, ${activeLon.toFixed(2)}E`,
+          location: displayPlace,
           severity,
-          language: appLanguage,
+          language: 'hi', // Enforce authentic Hindi Polly.Aditi voice for all outbound emergency calls
           max_depth_m: 1.1,
         }
       );
@@ -455,7 +464,7 @@ export default function App() {
         setExpandedComplaintId(null);
         triggerNotification(
           "Twilio Voice Call Outbound",
-          `Automated ${appLanguage === 'hi' ? 'Hindi (Polly.Aditi)' : 'English (alice)'} warning call dialed to ${res.target}.`,
+          `Automated Hindi (Polly.Aditi) warning call dialed to ${res.target}.`,
           "info"
         );
       }
@@ -1754,7 +1763,7 @@ export default function App() {
                                     onPress={() => handleVoiceCallTrigger(DEMO_CALL_RECIPIENT || '+917678656930', c.severity, displayPlace)}
                                   >
                                     <PhoneCall size={14} color="#dc2626" />
-                                    <Text style={styles.actionMenuText}>📞 Trigger Twilio Voice Alert Call (+91 7678656930)</Text>
+                                    <Text style={styles.actionMenuText}>📞 Trigger Voice Alert Call (Hindi Polly.Aditi)</Text>
                                   </TouchableOpacity>
 
                                   <TouchableOpacity 

@@ -336,7 +336,8 @@ def trigger_voice_call(payload: VoiceCallRequest):
         raise HTTPException(status_code=400, detail="phone_number is missing or not a valid E.164 number; no call was placed.")
     loc = payload.location or "Patna District"
     sev = payload.severity or "CRITICAL"
-    lang = payload.language or "hi"
+    # Twilio emergency voice broadcast always speaks in authentic Hindi (Polly.Aditi) for high-impact disaster alerting
+    lang = "hi" if (not payload.language or payload.language.lower() in ["hi", "hi-in", "hindi", "en"]) else payload.language
     depth = payload.max_depth_m
     res = agent_trigger_voice_call(
         phone_number=target_phone,
