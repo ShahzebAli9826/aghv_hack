@@ -294,6 +294,10 @@ Aegis solves SAR noise and optical cloud occlusion by passing co-registered Sent
 - **Optical Stream:** Distinguishes temporary pooling from permanent water bodies via Normalized Difference Water Index (NDWI).
 - **Decoder:** Lightweight All-MLP decoder outputting sub-meter inundation boundaries.
 
+> [!IMPORTANT]
+> **Trained Model Weights Checkpoint (`best_model_focal.pth` ~245 MB):**  
+> Due to GitHub's 100MB file limit, the trained PyTorch SegFormer checkpoint (`best_model_focal.pth`) is intentionally excluded from the Git repository. **To run the full deep learning satellite segmentation pipeline with trained weights, please request the model weights file from the creators/maintainers.** Place `best_model_focal.pth` in the project root (or set `MODEL_WEIGHTS_PATH` in `.env`). If the file is not present, the backend automatically operates in fallback simulation mode.
+
 ---
 
 ### MirEye Physical Intelligence & TWI Hydrology
@@ -566,7 +570,13 @@ cd azin_hack
    ```
    Add your `TINYFISH_API_KEY` in `.env` to enable real-time web intelligence crawling.
 
-5. **Start the FastAPI backend server:**
+5. **Obtain Trained Model Weights (`best_model_focal.pth`):**
+   > **Note:** Due to GitHub's 100MB file limit, the trained SegFormer weights file (`best_model_focal.pth`, ~245 MB) is not tracked in the Git repository.
+   - **Please request the model weights file from the creators/maintainers.**
+   - Place `best_model_focal.pth` in the project root directory (or set `MODEL_WEIGHTS_PATH=/path/to/best_model_focal.pth` in your `.env`).
+   - *(If run without weights, the backend logs `[SegFormer MiT-B2] PyTorch weights not found` and automatically operates in fallback simulation mode).*
+
+6. **Start the FastAPI backend server:**
    ```bash
    python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
