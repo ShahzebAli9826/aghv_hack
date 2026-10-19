@@ -532,7 +532,7 @@ Aegis/
 ### Step 1: Clone the Repository
 ```bash
 git clone https://github.com/ShahzebAli9826/aws_hack.git
-cd aws_hack
+cd azin_hack
 ```
 
 ---
